@@ -33,12 +33,21 @@ getsize()
 
 draw()
 {
+	if [ $p2 -gt 0 ]
+	then
+		shift1=0
+		shift2=$p2
+	else
+		shift1=$((0-$p2))
+		shift2=0
+	fi
+
 	printf '\033[H\033[31mh/u\033[0m scroll, \033[31mj/i\033[0m pgup/pgdn, \033[31mk/o\033[0m offset, \033[31mUPPERCASE\033[0m x10' "$f1" "$f2"
 	{
 		cat -n -- "$f1" | tr '\t' ' '
 		tr '\0' '\n' < /dev/zero
 	} |
-	tail -n +$p |
+	tail -n +$((p+shift1)) |
 	head -n $(((sh-2)/3)) |
 	LC_ALL=en_US.UTF-8 gawk '{
 		printf "\n\nL%s\033[K\n", substr($0,1,'$sw')
@@ -49,7 +58,7 @@ draw()
 		cat -n -- "$f2" | tr '\t' ' '
 		tr '\0' '\n' < /dev/zero
 	} |
-	tail -n +$((p+p2)) |
+	tail -n +$((p+shift2)) |
 	head -n $(((sh-2)/3)) |
 	LC_ALL=en_US.UTF-8 gawk '{
 		printf "\n\033[K\n\nR%s\033[K", substr($0,1,'$sw')
