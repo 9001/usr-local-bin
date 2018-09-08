@@ -1,0 +1,193 @@
+#!/usr/bin/env python2
+from __future__ import print_function
+import struct
+import time
+import sys
+import os
+
+"""revert.py: File Revert Utility"""
+__version__   = "1.2"
+__author__    = "ed <revert@ocv.me>"
+__credits__   = ["stackoverflow.com"]
+__license__   = "MIT"
+__copyright__ = "2017"
+
+
+# most virtual disk images are aligned to 1 MB
+BUFSIZE=1024*1024*1
+# but since we will be writing to a spinner disk we can safely go lower,
+# 4 kB seems optimal on this particular drive according to the dd test
+# ...except python being slow means 64kb (this script in blksize mode)
+BUFSIZE=1024*64
+
+# DEBUG: fake writes, don't modify target
+FAKE_WRITES = True
+FAKE_WRITES = False
+
+def p(*args, **kwargs):
+	print(*args, file=sys.stderr, **kwargs)
+
+if len(sys.argv) < 2:
+	p()
+	p('  operation mode 1 needs one argument:')
+	p('    path to target file')
+	p()
+	p('  takes input on STDIN and ensures that')
+	p('  target-file matches the input, rewriting')
+	p('  each chunk which differs from STDIN')
+	p()
+	p('  operation mode 2 needs one argument:')
+	p('    "blksize"')
+	p()
+	p('  if argument 1 is blksize,')
+	p('  try to determine the sector size of the')
+	p('  physical storage device by writing')
+	p('  repeatedly to $PWD/blksize')
+	p()
+	exit(1)
+
+# bash version:
+# writes=8; blksize=$((4096*1024)); value=0; while [[ $blksize -gt 1 ]]; do value=$((value+1)); dir="$(pwd)"; cd /dev/shm; printf "\x$(printf '%02x' $value)" > ddt1; for n in {1..7}; do cat ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 > ddt2; mv ddt2 ddt1; done; t0=$(date +%s%N); dd if=ddt1 bs=$blksize count=$writes of="$dir/ddtmp" 2>/dev/null >/dev/null ; t1=$(date +%s%N); printf 'ms %d blksize %d writes %d\n' $(( (t1-t0)/1000000 )) $blksize $writes; blksize=$((blksize/2)); writes=$((writes*2)); done
+if sys.argv[1].lower() == 'blksize':
+	# no need for sync() after all,
+	# leaving it in for reference
+	#import ctypes
+	#libc = ctypes.CDLL('libc.so.6')
+	with open('blksize', 'wb') as f:
+		value = 0
+		writes = 2
+		blksize = 4096 * 1024 * 32
+		byte = struct.pack('B', value)
+		buf = byte * blksize
+		for write in range(writes):
+			f.write(buf)
+		f.flush()
+
+		while blksize > 1:
+			times = []
+			for redo in range(4):
+				value += 1
+				byte = struct.pack('B', value)
+				buf = byte * blksize
+				f.seek(0)
+				t0 = time.time()
+				for write in range(writes):
+					f.write(buf)
+					f.flush()
+					#libc.sync()
+				t1 = time.time()
+				times.append(t1-t0)
+			p('{0:9.6f} sec @ {1} byte ({2} KB) ({3} writes)'.format(
+				sum(times), blksize, blksize/1024, writes))
+			blksize /= 2
+			writes *= 2
+	exit(0)
+
+f = open(sys.argv[1], 'r+b')
+f.seek(0, os.SEEK_END)
+len_file = f.tell()
+len_orig = 0
+file_pos = 0
+f.seek(0)
+
+num_rewritten = 0
+num_unmodified = 0
+chunks = len_file / BUFSIZE
+chunk = 0
+
+blocks = [ u'\u258f', u'\u258e', u'\u258d', u'\u258c', u'\u258b', u'\u258a', u'\u2589', u'\u2588' ]
+fullblock = blocks[len(blocks)-1]
+
+p('\n{0:>8} {1:>6} {2:>6}\n\n{3}\n'.format(
+	'file%', 'skip', 'write', '.'*78))
+
+filemap = ''
+filemap_n = 0
+filemap_size = 1024*1024
+filemap_has_writes = False
+
+print_interval = 1024*1024*8
+
+t0 = time.time()
+
+nsubs = 64
+while nsubs > 0:
+	f.seek(len_orig)
+	orig16 = sys.stdin.read(BUFSIZE*nsubs)
+	used16 = f.read(BUFSIZE*nsubs)
+	for subseg in range(nsubs):
+		orig = orig16[BUFSIZE*subseg:BUFSIZE*(subseg+1)]
+		used = used16[BUFSIZE*subseg:BUFSIZE*(subseg+1)]
+		chunk += 1
+		if chunk > chunks:
+			chunks = chunk
+		olen = len(orig)
+		ulen = len(used)
+		len_orig += olen
+		if olen == 0:
+			# end of original data, truncate file here
+			if not FAKE_WRITES:
+				try: f.truncate(len_orig)
+				except: pass
+			nsubs = 0
+			break
+		
+		clean = (orig == used)
+		
+		#print('chunk {0:>4}  subseg {1:>2}  file_pos {2}  len_orig {3}  clean {4!s:>5}  orig {5:2x}  used #{6:2x}'.format(
+		#	chunk - 1, subseg, file_pos, len_orig, clean, ord(orig[0]), ord(used[0])))
+		
+		# seg=993; fn=bad.vdi; rm f1 f2; mkfifo f1; mkfifo f2; dd bs=65536 if=good.vdi of=f1 count=1 skip=$seg 2>/dev/null & dd bs=65536 if=$fn of=f2 count=1 skip=$seg 2>/dev/null & cmp f1 f2 ; rm f1 f2
+		
+		if clean:
+			num_unmodified += 1
+		else:
+			num_rewritten += 1
+			filemap_has_writes = True
+			if not FAKE_WRITES:
+				f.seek(file_pos)
+				f.write(orig)
+		file_pos = len_orig
+		if file_pos % filemap_size == 0:
+			if filemap_has_writes:
+				filemap += '@'
+			else:
+				filemap += '.'
+			filemap_has_writes = False
+			filemap_n += 1
+			if filemap_n >= 64:
+				filemap_n = 0
+				filemap += '  {0} MB\n'.format(
+					(chunk * BUFSIZE) / filemap_size)
+		
+		if file_pos % print_interval == 0:
+			perc = chunk * 100.0 / chunks
+			barwidth = perc * 0.78
+			remainder = barwidth % 1
+			bar = fullblock * int(barwidth)
+			bar += blocks[int(remainder*len(blocks))]
+			p(u'\033[3A{0:7.2f}% {1:6} {2:6}\n\n{3}'.format(
+				perc, num_unmodified, num_rewritten, bar))
+
+f.close()
+p()
+p(filemap)
+p()
+
+t1 = time.time()
+p('finished in {0:.3f} seconds'.format(t1-t0))
+print('{0:.2f}'.format(
+	(num_rewritten * BUFSIZE) / (1024*1024.0)))
+exit(0)
+
+n = 0
+while True:
+	n += 1
+	buf = sys.stdin.read(BUFSIZE)
+	sz = len(buf)
+	if sz < BUFSIZE:
+		p(n, len(buf))
+	if sz == 0:
+		break
+p(n)
+
