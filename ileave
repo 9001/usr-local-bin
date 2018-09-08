@@ -33,7 +33,7 @@ getsize()
 
 draw()
 {
-	printf '\033[H\033[31mj/i\033[0m scroll, \033[31mh/u\033[0m pgup/pgdn, \033[31mk/o\033[0m shift, \033[31mUPPERCASE\033[0m x10' "$f1" "$f2"
+	printf '\033[H\033[31mh/u\033[0m scroll, \033[31mj/i\033[0m pgup/pgdn, \033[31mk/o\033[0m offset, \033[31mUPPERCASE\033[0m x10' "$f1" "$f2"
 	{
 		cat -n -- "$f1" | tr '\t' ' '
 		tr '\0' '\n' < /dev/zero
@@ -55,7 +55,7 @@ draw()
 		printf "\n\033[K\n\nR%s\033[K", substr($0,1,'$sw')
 	}'
 	
-	printf '\033[1;53H'
+	printf '\033[1;54H'
 }
 
 clear
@@ -77,17 +77,17 @@ do
 	getsize
 
 	case "$lc" in
-	j)
+	h)
 		p=$((p+$step))
 		;;
-	i)
+	u)
 		p=$((p-$step))
 		[ $p -le 0 ] && p=1
 		;;
-	h)
+	j)
 		p=$((p+((sh-2)/3)))
 		;;
-	u)
+	i)
 		p=$((p-((sh-2)/3)))
 		[ $p -le 0 ] && p=1
 		;;
