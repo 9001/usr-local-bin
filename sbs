@@ -1,0 +1,118 @@
+#!/bin/bash
+set -e
+
+# sbs - show two files side by side
+# ed <irc.rizon.net> 
+
+f1="$1"
+f2="$2"
+[ ! -z "$f2" ] ||
+{
+	printf 'need arg 1:  file 1\n'
+	printf 'need arg 2:  file 2\n'
+	exit 1
+}
+
+p=1
+p2=0
+split=32
+nsplit=''
+
+end()
+{
+	stty echo
+}
+trap end EXIT
+stty -echo
+
+gensplit()
+{
+	sw=$(tput cols)
+	sh=$(tput lines)
+	split2=$((sw-split))
+}
+
+draw()
+{
+	printf '\033[H\033[31mj/i\033[0m scroll, \033[31mh/u\033[0m pgup/pgdn, \033[31mk/o\033[0m pane-sync, \033[31mn/m\033[0m adjust-split, \033[31mUPPERCASE\033[0m x10\n\033[31m' "$f1" "$f2"
+	{
+		cat -n -- "$f1" | tr '\t' ' '
+		tr '\0' '\n' < /dev/zero
+	} |
+	tail -n +$p |
+	head -n $((sh-2)) |
+	LC_ALL=en_US.UTF-8 gawk '{
+		printf "%-'$split's\n", substr($0,1,'$split')
+	}'
+	
+	printf '\033[J\033[2H\033[0m'
+	{
+		cat -- "$f2"
+		tr '\0' '\n' < /dev/zero
+	} |
+	tail -n +$((p+p2)) |
+	head -n $((sh-2)) |
+	LC_ALL=en_US.UTF-8 gawk '{
+		printf "\033['$((split+1))'G%s\033[K\n", substr($0,1,'$split2')
+	}'
+	
+	printf '\033[0m'
+}
+
+clear
+gensplit
+draw
+
+while true
+do
+	read -u1 -n1 -r
+	lc="$(
+		printf '%s\n' "$REPLY" |
+		tr '[:upper:]' '[:lower:']
+	)"
+	
+	step=1
+	[ "$REPLY" == "$lc" ] ||
+		step=10
+	
+	case "$lc" in
+	j)
+		p=$((p+$step))
+		;;
+	i)
+		p=$((p-$step))
+		[ $p -le 0 ] && p=1
+		;;
+	h)
+		p=$((p+(sh-2)))
+		;;
+	u)
+		p=$((p-(sh-2)))
+		[ $p -le 0 ] && p=1
+		;;
+	k)
+		p2=$((p2+$step))
+		;;
+	o)
+		p2=$((p2-$step))
+		;;
+	n)
+		nsplit=-$step
+		;;
+	m)
+		nsplit=$step
+		;;
+	q)
+		exit 0
+		;;
+	esac
+	
+	[ ! -z "$nsplit" ] &&
+	{
+		split=$((split+nsplit))
+		nsplit=''
+		gensplit
+	}
+	
+	draw
+done
