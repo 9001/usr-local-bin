@@ -2,7 +2,7 @@
 set -e
 
 # sbs - show two files side by side
-# ed <irc.rizon.net> 
+# ed <irc.rizon.net> MIT-licensed
 
 f1="$1"
 f2="$2"
