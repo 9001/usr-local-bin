@@ -1,0 +1,43 @@
+#!/bin/bash
+set -e
+
+# uclose - unmount a LUKS-encrypted drive
+# ed <irc.rizon.net> MIT-licensed
+
+while read dev
+do
+	echo
+	df -h /mnt/"$dev"
+	printf '\nunmount %s [y/n] ' "$dev"
+	while true
+	do
+		read -n1 -u1 -r
+		#printf '[%s]\n' "$REPLY"
+		printf '%s\n' "$REPLY" | grep -qE '^[yYnN]$' || continue
+		printf '%s\n' "$REPLY" | grep -qE '^[yY]$' &&
+			act=1 || act=''
+		break
+	done
+	echo
+	[[ $act ]] ||
+		continue
+
+	while true
+	do
+		umount /mnt/"$dev" &&
+			break || sleep 1
+	done
+
+	while true
+	do
+		cryptsetup luksClose "$dev" &&
+			break || sleep 10
+	done
+
+	rmdir /mnt/"$dev" || true
+
+done < <(
+	find /dev/mapper/ -iname \*_ov |
+	sed -r 's@.*/@@'
+)
+echo ok
