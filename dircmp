@@ -1,0 +1,54 @@
+#!/bin/bash
+set -e
+
+# dircmp - compare current and other directory
+# ed <irc.rizon.net> MIT-licensed
+
+[[ "$1" == "" ]] &&
+{
+	echo "need argument 1: other directory"
+	exit 1
+}
+
+n=0
+for x in . "$1"
+do
+	n=$((n+1))
+	cd "$x"
+	
+	find -type f -exec md5sum '{}' \+ |
+	{
+		which pv >/dev/null 2>/dev/null && pv | cat
+	} |
+	sed -r 's/(.{32})(.*)/\2\1/' |
+	sort |
+	sed -r 's/(.*)(.{32})/\2\1/' > /dev/shm/dircmp.$n
+done
+
+cat /dev/shm/dircmp.{1,2} |
+sort -u > /dev/shm/dircmp.c
+
+for x in 1 2
+do
+	cat /dev/shm/dircmp.$x |
+	cut -c35- > /dev/shm/dircmp.${x}f
+done 
+
+printf '\033[0mOnly in starting directory:\033[1;31m\n'
+diff -NarU1 /dev/shm/dircmp.*f |
+grep -E '^-\./' |
+cut -c4-
+echo
+
+printf '\033[0mOnly in argument directory:\033[1;33m\n'
+diff -NarU1 /dev/shm/dircmp.*f |
+grep -E '^\+\./' |
+cut -c4-
+echo
+
+printf '\033[0mModified files:\033[1;32m\n'
+cat /dev/shm/dircmp.c | 
+cut -c37- |
+sort |
+uniq -d
+printf '\033[0m\n'
