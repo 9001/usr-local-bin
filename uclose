@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# uclose - unmount a LUKS-encrypted drive
-# ed <irc.rizon.net> MIT-licensed
+# uclose - interactively unmounts and closes one or more luks partitions
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
 
 while read dev
 do
@@ -12,29 +12,28 @@ do
 	while true
 	do
 		read -n1 -u1 -r
-		#printf '[%s]\n' "$REPLY"
 		printf '%s\n' "$REPLY" | grep -qE '^[yYnN]$' || continue
 		printf '%s\n' "$REPLY" | grep -qE '^[yY]$' &&
-			act=1 || act=''
+			act=y || act=''
 		break
 	done
 	echo
-	[[ $act ]] ||
+	
+	[ $act ] ||
 		continue
-
+	
 	while true
 	do
 		umount /mnt/"$dev" &&
 			break || sleep 1
 	done
+	rmdir /mnt/"$dev"
 
 	while true
 	do
-		cryptsetup luksClose "$dev" &&
+		cryptsetup close "$dev" &&
 			break || sleep 10
 	done
-
-	rmdir /mnt/"$dev" || true
 
 done < <(
 	find /dev/mapper/ -iname \*_ov |

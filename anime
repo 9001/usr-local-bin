@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+# coding: utf-8
+from __future__ import print_function, unicode_literals
+
+
+"""anime.py: verify crc32 in filename"""
+__version__   = "1.0"
+__author__    = "ed <animepy@ocv.me>"
+__url__       = "https://ocv.me/dev/?anime.py"
+__credits__   = ["stackoverflow.com"]
+__license__   = "MIT"
+__copyright__ = 2019
+
+
+import os
+import re
+import sys
+import time
+import zlib
+
+
+def getcrc(fpath, fsize):
+	t0 = time.time()
+	fpos = 0
+	next_print = 0
+	print_interval = 1024*1024*16
+	last_print_pos = 0
+	last_print_ts = t0
+	
+	crc = 0
+	with open(fpath, 'rb', 512*1024) as f:
+		while True:
+			if fpos >= next_print:
+				now = time.time()
+				time_delta = now - last_print_ts
+				bytes_delta = fpos - last_print_pos
+				if bytes_delta <= 0 or time_delta <= 0:
+					perc = 0
+					speed = 0
+				else:
+					perc = (100. * fpos) / fsize
+					speed = ((
+						(fpos - last_print_pos) /
+						(now - last_print_ts)) /
+						(1024. * 1024))
+				
+				next_print += print_interval
+				print('\033[A{:7.2f}%  {}  ({:8.2f} MiB/s)'.format(
+					perc, fpath, speed))
+			
+			buf = f.read(64*1024)
+			if not buf:
+				break
+			
+			crc = zlib.crc32(buf, crc)
+			fpos += len(buf)
+	
+	if crc < 0:
+		crc &= 2 ** 32 - 1
+	
+	return "{:08X}".format(crc), time.time() - t0
+
+
+def filenames():
+	args = sys.argv[1:]
+	if args:
+		for x in sys.argv[1:]:
+			yield x
+		
+		return
+
+	print('no files provided as arguments;')
+	print('reading filenames from stdin...')
+	
+	for x in sys.stdin:
+		if not x:
+			return
+		
+		yield x.rstrip()
+
+
+def main():
+	sfv = ''
+	fails = []
+	re_anycrc = re.compile(r'[({[][0-9A-F]{8}[])}]')
+	for fpath in filenames():
+		crc_was_found = re_anycrc.search(fpath.upper())
+		
+		print()
+		fsize = os.path.getsize(fpath)
+		crc, time_spent = getcrc(fpath, fsize)
+		
+		if re.search(r'[({[]' + crc + r'[])}]', fpath.upper()):
+			c = '32'
+		elif not crc_was_found:
+			c = '1;30;43'
+			sfv += '{} {}\n'.format(fpath, crc.lower())
+		else:
+			c = '1;37;41'
+			fails.append(fpath)
+		
+		speed = (fsize * 1.0 / time_spent) / (1024. * 1024)
+
+		print('\033[A\033[{}m{}\033[0m  {}  \033[36m({:.2f} MiB/s)\033[0m\033[J'.format(
+			c, crc, fpath, speed))
+	
+	if sfv:
+		print("\nthese didn't have crc in the filename so here's an sfv:")
+		print("xclip -o > /dev/shm/tf; sha1sum /dev/shm/tf <(cat *.sfv | tr -d '\r')")
+		print(sfv)
+	
+	if fails:
+		print('\nthese failed:')
+		for x in fails:
+			print(x)
+		
+		sys.exit(1)
+
+
+if __name__ == '__main__':
+	main()

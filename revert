@@ -18,7 +18,7 @@ BUFSIZE=1024*1024*1
 # but since we will be writing to a spinner disk we can safely go lower,
 # 4 kB seems optimal on this particular drive according to the dd test
 # ...except python being slow means 64kb (this script in blksize mode)
-BUFSIZE=1024*64
+#BUFSIZE=1024*64
 
 # DEBUG: fake writes, don't modify target
 FAKE_WRITES = True
@@ -126,7 +126,7 @@ while nsubs > 0:
 		len_orig += olen
 		if olen == 0:
 			# end of original data, truncate file here
-			if not FAKE_WRITES:
+			if not FAKE_WRITES and len_orig > 0:
 				try: f.truncate(len_orig)
 				except: pass
 			nsubs = 0

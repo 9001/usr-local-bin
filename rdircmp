@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# rdircmp - ranger directory compare
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+
+# xfce4-terminal -e /home/ed/dev/rdircmp
+
+xdotool sleep 0.3 key --clearmodifiers \
+  Alt+Tab
+
+xdotool sleep 0.1 key --clearmodifiers --delay 100 \
+  Escape y d Escape Tab
+
+sleep 0.5
+d1="$(xclip -o -selection clipboard)"
+xdotool key --clearmodifiers --delay 100 Escape y d
+
+sleep 0.1
+xdotool key --clearmodifiers Alt+Tab
+d2="$(xclip -o -selection clipboard)"
+
+cd -- "$d1"
+dircmp "$d2"
+read -u1 -r

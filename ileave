@@ -2,7 +2,7 @@
 set -e
 
 # ileave - interleave two files
-# ed <irc.rizon.net> MIT-licensed
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
 
 f1="$1"
 f2="$2"

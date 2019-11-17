@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# rimgcml - ranger image compare
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+
+# xfce4-terminal -e /home/ed/dev/rdircmp
+
+xdotool sleep 0.3 key --clearmodifiers Alt+Tab
+
+xdotool sleep 0.2 key --clearmodifiers --delay 100 Escape y p
+sleep 0.2
+d1="$(xclip -o -selection clipboard)"
+xdotool key --clearmodifiers --delay 100 Escape Tab Escape y p
+d2="$(xclip -o -selection clipboard)"
+
+xdotool key --clearmodifiers Alt+Tab
+
+identify -verbose "$d1" > /dev/shm/img1 &
+identify -verbose "$d2" > /dev/shm/img2 &
+wait
+printf '1:%s\n' "$d1" >> /dev/shm/img1 &
+printf '2:%s\n' "$d2" >> /dev/shm/img2 &
+cdiff /dev/shm/img{1,2}
+read -u1 -r
+
+# xfce4-terminal --maximize -e /home/ed/dev/rimgcmp

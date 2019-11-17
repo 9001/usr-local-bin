@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+from __future__ import print_function
+
+
+"""alpchk.py: verify apk repo state"""
+__version__   = "1.6"
+__author__    = "ed <alpchk@ocv.me>"
+__credits__   = ["stackoverflow.com"]
+__license__   = "MIT"
+__copyright__ = 2018
+
+
+import re
+import subprocess
+import sys
+
+PY2 = (sys.version_info[0] == 2)
+
+
+def inf(txt):
+	print('\033[1;32m[+] \033[0m' + txt)
+
+def msg(txt):
+	print('\033[1;34m[*] \033[0m' + txt)
+
+def err(txt):
+	print('\033[1;31m[X] \033[0m' + txt)
+
+
+def b2hex(data):
+	if PY2:
+		return ' '.join(map(lambda b: format(ord(b), "02x"), data))
+	else:
+		if type(data) is str:
+			return ' '.join(map(lambda b: format(ord(b), "02x"), data))
+		else:
+			return ' '.join(map(lambda b: format(b, "02x"), data))
+
+
+class Package(object):
+	def __init__(self, name):
+		self.name = name
+		self.versions = []
+
+		
+class ApkParser(object):
+	def __init__(self):
+		self.ok = False
+		self.pkgs = []
+		
+		self._parse_apk_policy()
+	
+	
+	def _get_apk_policy(self):
+		apk = subprocess.Popen(['apk','policy','*'],
+			stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE)
+		
+		while True:
+			ln = apk.stdout.readline()
+			if not ln:
+				break
+			
+			yield ln.decode('utf-8').rstrip('\n')
+		
+		apk.wait()
+		yield 'eof policy:'
+		self.retcode = apk.returncode
+	
+	
+	def _parse_apk_policy(self):
+		pkgs = []
+		discovered = 0
+		
+		# current package info, for pkgs
+		name = None
+		versions = []
+		
+		# current version info, for pkg info
+		installed_ver = None
+		current_ver = None
+		repos = []
+		
+		# patterns
+		r_repm = re.compile('^    https?://')
+		r_rept = re.compile('^    @([^ ]*) ')
+		r_inst = re.compile('^    lib/apk/db/installed')
+		r_locl = re.compile('^    (/.*/packages/.*)')
+		r_ver  = re.compile('^  ([^ ].*):')
+		r_name = re.compile('^([^ ].*) policy:')
+		
+		line_counter = 0
+		for x in self._get_apk_policy():
+			line_counter += 1
+			
+			m_repm = r_repm.match(x)
+			m_rept = r_rept.match(x)
+			m_inst = r_inst.match(x)
+			m_locl = r_locl.match(x)
+			m_ver  = r_ver.match(x)
+			m_name = r_name.match(x)
+			
+			
+			# lowest level: repos, installed
+			if m_repm:
+				repos.append('main')
+				continue
+			
+			if m_rept:
+				repos.append(m_rept.group(1))
+				continue
+			
+			if m_inst:
+				installed_ver = current_ver
+				repos.append('installed')
+				continue
+			
+			if m_locl:
+				repos.append(m_locl.group(1))
+				continue
+			
+			
+			# left lowest level, formulate a version
+			if repos:
+				if versions and versions[-1][0] == current_ver:
+					# version number repeated, append to last
+					versions[-1] += repos
+				else:
+					versions.append([current_ver] + repos)
+				
+				repos = []
+			
+			if m_ver:
+				current_ver = m_ver.group(1)
+				continue
+			
+			if m_name:
+				discovered += 1
+				if installed_ver is not None:
+					pkgs.append([name, versions])
+				
+				name = m_name.group(1)
+				installed_ver = None
+				versions = []
+				continue
+			
+			if '://' in x:
+				# tagless repo, don't care
+				continue
+			
+			if 'etc/apk/cache' in x:
+				# ???
+				continue
+			
+			if '/home/' in x and '/packages/' in x:
+				# local package (TODO: clean up)
+				continue
+			
+			raise RuntimeError('error on line {0}: [{1}]'.format(
+				line_counter, x))
+		
+		self.pkgs = pkgs
+		self.total = discovered
+
+
+def main():
+	
+	msg('collecting apk policy')
+	apk = ApkParser()
+	
+	if apk.retcode != 0:
+		err('apk returned {0}'.format(apk.retcode))
+		return
+	
+	msg('{0} packages installed, {1} in total\n'.format(
+		len(apk.pkgs), apk.total))
+	
+	worldtags = {}
+	with open('/etc/apk/world', 'rb') as f:
+		for line in [x.decode('utf-8').rstrip() for x in f]:
+			if not line:
+				continue
+			
+			if '@' in line:
+				pkgname, worldtag = line.split('@')
+			else:
+				pkgname = line
+				worldtag = 'main'
+			
+			worldtags[pkgname] = worldtag
+	
+	str_held_back = u''
+	num_held_back = 0
+	
+	str_orphaned = u''
+	num_orphaned = 0
+	
+	str_local = u''
+	num_local = 0
+	
+	for name, versions in sorted(apk.pkgs):
+		
+		try:
+			worldtag = worldtags[name]
+		except:
+			worldtag = u'-'
+		
+		report = u'{0} \033[1;37m{1}\033[0m\n'.format(
+			name, worldtag)
+		
+		held_back = False
+		orphaned = False
+		local = False
+		
+		#if name == 'bchunk':
+		#	print(versions)
+		#	sys.exit(0)
+		
+		installed_ver = None
+		oldest_remote = None
+		latest_local = None
+		
+		for pkg_ver in versions:
+			ver = pkg_ver[0]
+			repos = pkg_ver[1:]
+			if not repos:
+				raise RuntimeError('repoless ver: ' + name)
+			
+			for repo in repos:
+				if '/home/' in repo \
+				and '/packages/' in repo:
+					latest_local = ver
+				
+				elif repo == 'installed':
+					installed_ver = ver
+				
+				elif oldest_remote is None:
+					oldest_remote = ver
+			
+			report += '  \033[33m{0}\033[0m \033[36m{1}\033[0m\n'.format(
+				ver, ', '.join(repos))
+		
+		if oldest_remote is None \
+		and latest_local is None:
+			orphaned = True
+		
+		if oldest_remote is not None \
+		and installed_ver < oldest_remote:
+			held_back = True
+		
+		if oldest_remote is not None \
+		and latest_local is not None \
+		and oldest_remote > latest_local:
+			held_back = True
+
+		print(report)
+		
+		if held_back:
+			num_held_back += 1
+			str_held_back += '\n\033[31m' + report
+		
+		if orphaned:
+			num_orphaned += 1
+			str_orphaned += '\n\033[31m' + report
+	
+	errors = False
+	if str_held_back:
+		print('\n\n\033[1;37;41m' + '/'*72 + '\n//\033[0m\033[K ' +
+			'{0} packages were held back:'.format(num_held_back))
+		print(str_held_back)
+		errors = True
+	
+	if str_orphaned:
+		print('\n\n\033[1;37;41m' + '/'*72 + '\n//\033[0m\033[K ' +
+			'{0} packages were moved to another repository:'.format(num_orphaned))
+		print(str_orphaned)
+		errors = True
+		
+	if not errors:
+		inf('everything is OK')
+	
+
+if __name__ == '__main__':
+	main()
+

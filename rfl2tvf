@@ -1,0 +1,47 @@
+#!/bin/bash
+set -e
+
+# rfl2tvf - convert between two file listing formats
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+#
+# dependencies:
+#   apk add tzdata
+#
+# usage of this program:
+#   cat some.rfl | LC_ALL=C sort | rfl2tvf Asia/Tokyo
+#   cat some.rfl | LC_ALL=C sort | rfl2tvf Europe/Oslo
+#   cat some.rfl | LC_ALL=C sort | rfl2tvf u
+#   cat some.rfl | LC_ALL=C sort | rfl2tvf
+#
+# normalize sorting in a reference tvf file:
+#   pigz -d < reference.tvf.gz | LC_ALL=C sort -k4,4 > normalized.tvf
+#
+# tvf spec/example:
+#   "%12s %Y-m-%d %H:%M:%S %p\n"  (pseudocode)
+#    20656344319 2009-07-16 21:26:56 hd/t5/revo.dd.tar.gz
+#
+# rfl spec/example:
+#   "%p // %l [%M/%s/%g:%u] @%T@"  (gnu find)
+#   ./hd/t5/revo.dd.tar.gz //  [-rwxr-xr-x/20656344319/ed:ed] @1247779616
+#
+# reference rfl generator:
+#   exec find "$@" \( -type f -or -type l \) -printf '%p // %l [%M/%s/%g:%u] @%T@\n' | sed -r 's/\.[0-9]+$//'
+
+
+[ -z "$1" ] ||
+	export TZ=$1
+
+[ "$1" = "u" ] &&
+	export TZ=UTC
+
+
+# localtime uses TZ, gmtime is always UTC
+exec perl -e 'use POSIX qw(strftime); use strict; use warnings; while (<>) { next unless $_ =~ m`(.*) // (.*) \[[dlrwx-]{10}/([0-9]+)/[^]]+\] @([0-9]+)$`; my $ln = ""; if ($2 ne "") {$ln = " -> $2"} printf "%12d %s %s%s\n", $3, strftime("%Y-%m-%d %H:%M:%S", localtime($4)), substr($1, 2), $ln; }';
+
+
+# bonus: mdw2tvf
+awk '{fn=$0;sub(/[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +[^ ]+ +/, "", fn);printf "%12s %s %s %s\n", $4, $2, $3, fn}' mdw.jackhammer.real.mk2 | LC_ALL=C sort -k4,4 > /dev/shm/a
+rfl2tvf < rfl.jackhammer | LC_ALL=C sort -k4,4 > /dev/shm/b
+cdiff /dev/shm/{a,b}
+
+# and a bonus warning too:  awk %d is int32; wraps around to -2147483648 exactly on large values, use %s instead wew

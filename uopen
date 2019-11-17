@@ -1,44 +1,91 @@
 #!/bin/bash
 set -e
 
-# uopen - mount a LUKS-encrypted drive
-# ed <irc.rizon.net> MIT-licensed
+# uopen - decrypts and mounts one or more luks partitions,
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+# -- run without arguments for interactive mode
 
-rmdir /mnt/*_ov >/dev/null 2>/dev/null || true
+[ -z "$1" ] || {
+	onedev="/dev/${1##*/}"
+	[ -e "$onedev" ] ||
+		onedev=
+}
+
+f=/dev/shm/uopen
+cln() {
+	rv=$?
+	head -c 64 /dev/urandom > $f
+	rm $f
+	exit $rv
+}
+trap cln EXIT
+trap cln ERR
 
 while read dev size
 do
-	ov="${dev}_ov"
+	# locate partition inside /sys/block/x/y where
+	# x is the device (sda/nvme0n1) and
+	# y is the partition (1/p1/null)
 
-	[[ -e "/dev/mapper/${ov}" ]] &&
+	pdev="$dev"
+	blkpath="/sys/block/$dev"
+	while [ ! -e "$blkpath" ]
+	do
+		pdev="${pdev%?}"
+		blkpath="/sys/block/$pdev/$dev"
+	done
+	[ -z "$pdev" ] && {
+		echo bug
+		exit 1
+	}
+
+	# check if already used by someone (luks)
+	[ -e "$blkpath"/holders ] &&
+	[ $(find "$blkpath"/holders -mindepth 1 -maxdepth 1 | wc -l) -gt 0 ] &&
 		continue
 	
-	printf '\nmount %s (%s) [y/n] ' "$dev" "$size"
+	printf '\n\033[36m'
+	find /dev/disk/by-id/ -printf '%f %l\n' |
+	awk -v v="$pdev" '$0~"/"v"$" {print $1}'
+
+	printf '\033[0mmount %s (%s) [y/n] ' "$dev" "$size"
 	while true
 	do
-		read -n1 -u1 -r
-		#printf '[%s]\n' "$REPLY"
+		[ -z "$onedev" ] && read -n1 -u1 -r || REPLY=y
+
 		printf '%s\n' "$REPLY" | grep -qE '^[yYnN]$' || continue
 		printf '%s\n' "$REPLY" | grep -qE '^[yY]$' &&
-			act=1 || act=''
+			act=y || act=
 		break
 	done
 	echo
-	[[ $act ]] ||
+	[ $act ] ||
 		continue
 
-	printf 'passphrase> '
-	read -u1 -rs
-	{
-		printf '%s' "$REPLY" |
-		cryptsetup luksOpen /dev/"$dev" "$ov"
+	stty -F /dev/tty -echo
+	printf 'pwd> '
+	touch $f
+	chmod 600 $f
+	head -n 1 /dev/tty | tr -d '\n' > $f
+	stty -F /dev/tty echo
+	echo
+	wc -c < $f
 
+	(
+		ov="${dev}_ov"
+
+		cryptsetup open -d $f /dev/"$dev" "$ov" || {
+			echo "failed to decrypt $dev ($size)"
+			exit 1
+		}
 		mkdir -p /mnt/"$ov"
 		mount /dev/mapper/"$ov" /mnt/"$ov"
-	} &
+	) &
 
 done < <(
-	lsblk -o KNAME,FSTYPE,size |
+	lsblk -o KNAME,FSTYPE,size $onedev |
 	awk '$2=="crypto_LUKS" {print $1, $3}'
+	#( [ -z "$onedev" ] && cat || grep -F -- "$onedev" )
 )
-echo ok
+echo waiting for unlocks to finish...
+wait

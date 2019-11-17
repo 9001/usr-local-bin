@@ -1,0 +1,56 @@
+#!/bin/bash
+set -e
+
+# mdircmp - compare multiple directores
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+#
+# invokes dircmp on several directories,
+# assumes first argument is the other parent folder to compare,
+# remaining arguments are subdirectories to compare against $PWD,
+# results are saved to /dev/shm/dcres.subdir.d
+# and hash-results for each folder is /dev/shm/dcres.subdir.{1,2}
+
+[ -z "$2" ] && {
+	echo "need arg 1:  other base path"
+	echo "need arg 2+: folders to compare between current and other"
+	exit 1
+}
+
+oth="$1"
+shift
+
+rm -f -- /dev/shm/dcres.*
+
+for x in "$@"
+do
+	[ -e "$x" ] &&
+		continue
+	
+	printf "not found in current directory (typo?): %s\n" "$x"
+	exit 1
+done
+
+for x in "$@"
+do
+	x="${x%/}"
+	xf="$(printf '%s\n' "$x" | tr / -)"
+	
+	[ -e "$oth/$x" ] && [ -d "$oth/$x" ] || continue
+	
+	printf '\n%s\n' "$x" >&2
+	
+	(cd -- "$x" && dircmp "$oth/$x" > /dev/shm/dcres."$xf".d)
+	
+	for n in 1 2
+	do
+		cp -pv /dev/shm/dircmp.$n /dev/shm/dcres."$xf".$n
+	done
+done
+
+printf '\033[1;37;44m\033[Jfinished, hit enter to display results\n\033[0m'
+read -u1 -r
+
+for f in /dev/shm/dcres.*.d; do
+	printf '\n\033[1;34m----\033[0m\n'
+	cat "$f"
+done | less -R

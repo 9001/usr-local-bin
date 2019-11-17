@@ -1,0 +1,353 @@
+#!/usr/bin/env python
+# coding: utf-8
+from __future__ import print_function
+import signal
+import stat
+import sys
+import os
+import re
+import time
+import hashlib
+import threading
+from datetime import datetime
+
+
+"""
+hashwalk.py: recursive sha1 checksum
+             (runs faster in py3 than in py2)
+"""
+__version__   = "1.2"
+__date__      = "2019-03-25"
+__author__    = "ed <hashwalk@ocv.me>"
+__url__       = "https://ocv.me/dev/?hashwalk.py"
+__credits__   = ["stackoverflow.com"]
+__license__   = "MIT"
+__copyright__ = 2015
+
+
+if os.path.abspath(os.curdir) == '/':
+	# we are at the root of the filesystem; exclude some dontcares
+	excl_mask = re.compile(b'^(tmp|proc|dev|mnt|sys|media|lost.found|var/lib/docker)$')
+else:
+	# perform no filtering
+	excl_mask = re.compile(b'^$')
+
+
+# progress bar spec
+blocks = [ u'\u258f', u'\u258e', u'\u258d', u'\u258c', u'\u258b', u'\u258a', u'\u2589', u'\u2588' ]  
+fullblock = blocks[-1]
+
+
+def eprint(*args, **kwargs):
+	kwargs['file'] = sys.stderr
+	print(*args, **kwargs)
+
+if sys.version_info[0] > 2:
+	uprint = print
+	ueprint = eprint
+else:
+	# py2 defaults to ascii unless PYTHONIOENCODING is set
+	import codecs
+	STDOUT_NATIVE  = sys.stdout
+	STDOUT_ENATIVE = sys.stderr
+	STDOUT_UTF8    = codecs.getwriter('utf-8')(sys.stdout)
+	STDOUT_EUTF8   = codecs.getwriter('utf-8')(sys.stderr)
+	STDOUT_MUTEX   = threading.Lock()
+
+	def uprint(*args, **kwargs):
+		args = list(args)
+		with STDOUT_MUTEX:
+			sys.stdout = STDOUT_UTF8
+			print(*args, **kwargs)
+			sys.stdout = STDOUT_NATIVE
+	
+	def ueprint(*args, **kwargs):
+		args = list(args)
+		kwargs['file'] = sys.stderr
+		with STDOUT_MUTEX:
+			sys.stdout = STDOUT_EUTF8
+			print(*args, **kwargs)
+			sys.stdout = STDOUT_ENATIVE
+
+
+def halp(exitcode):
+	eprint()
+	eprint('  usage:')
+	eprint('    {0} [prescan] > output.mdw'.format(sys.argv[0]))
+	eprint()
+	eprint('  provide any argument to enables progress information:')
+	eprint('    pre-scan file info (size/modes) into ram before hashing,')
+	eprint('    not recommended for hilarious amounts of small files')
+	eprint()
+	eprint('  remember to cd into the root folder first')
+	eprint()
+	sys.exit(exitcode)
+
+if len(sys.argv) > 1 \
+and re.search('^-+h(elp)?$', sys.argv[1]):
+	halp(0)
+
+if sys.stdout.isatty():
+	eprint('\033[1;31m')
+	eprint('  error:')
+	eprint('    output must be redirected to file, or piped to another process\033[0m')
+	halp(1)
+
+
+def termsize():
+	import os
+	env = os.environ
+	def ioctl_GWINSZ(fd):
+		try:
+			import fcntl, termios, struct, os
+			cr = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ, '1234'))
+		except:
+			return
+		return cr
+	cr = ioctl_GWINSZ(0) or ioctl_GWINSZ(1) or ioctl_GWINSZ(2)
+	if not cr:
+		try:
+			fd = os.open(os.ctermid(), os.O_RDONLY)
+			cr = ioctl_GWINSZ(fd)
+			os.close(fd)
+		except:
+			pass
+	if not cr:
+		try:
+			cr = (env['LINES'], env['COLUMNS'])
+		except:
+			cr = (25, 80)
+	return int(cr[1]), int(cr[0])
+
+
+class CTermsize(object):
+	def __init__(self):
+		self.ev = False
+		self.scroll_top = 0
+		self.w, self.h = termsize()
+		
+		signal.signal(signal.SIGWINCH, self.ev_sig)
+		
+		thr = threading.Thread(target=self.worker)
+		thr.daemon = True
+		thr.start()
+	
+	def worker(self):
+		while True:
+			time.sleep(0.5)
+			if not self.ev:
+				continue
+			
+			self.ev = False
+			self.w, self.h = termsize()
+			
+			if self.scroll_top > 0:
+				self.scroll_region(self.scroll_top)
+			
+			#eprint(self.w, self.h)
+
+	def ev_sig(self, signal=None, frame=None):
+		self.ev = True
+	
+	def scroll_region(self, y1):
+		self.scroll_top = y1
+		if y1 == 0:
+			eprint('\033[r\033[{0};1H'.format(self.h))
+		else:
+			eprint('\033[{0};{1}r'.format(y1, self.h), end='')
+
+ss = CTermsize()
+#while True:
+#	time.sleep(9)
+
+
+def human1000(v):
+	suffix = ''
+	for unit in ['k','m']:
+		if abs(v) >= 1000:
+			v /= 1000.0
+			suffix = unit
+	width = 0
+	if v < 1000: width = 1
+	if v < 100: width = 2
+	if v < 10: width = 3
+	return '{v:.{w}f}{s}'.format(v=v, w=width, s=suffix)
+
+
+def human1024(v):
+	suffix = 'byte'
+	for unit in ['KB','MB','GB','TB','PB','EB','ZB']:
+		if abs(v) >= 1024:
+			v /= 1024.0
+			suffix = unit
+	width = 0
+	if v < 1000: width = 1
+	if v < 100: width = 2
+	if v < 10: width = 3
+	return '{v:.{w}f} {s}'.format(v=v, w=width, s=suffix)
+
+
+def status(msg):
+	ueprint(u'\033[H{0}\033[K\033[{1};1H'.format(msg, ss.h-1))
+
+
+def walker(top):
+	for fn in sorted(os.listdir(top)):
+		path = os.path.join(top, fn)
+		if path[:2] == b'./':
+			path = path[2:]
+		if os.path.islink(path):
+			continue
+		
+		sr = os.stat(path)
+		mode = sr.st_mode
+		if stat.S_ISDIR(mode):
+			if not excl_mask.search(path):
+				# py2 gets mad if we mention «yield from» at all
+				for v in walker(path):
+					yield v
+		
+		elif stat.S_ISREG(mode):
+			yield [ sr.st_mode, sr.st_mtime, sr.st_size, path ]
+		
+		else:
+			ueprint(u'\033[1;31mSkipping {0}\033[0m'.format(path.decode('utf-8', 'ignore')))
+
+
+# allow screen scrolling between lines 3 and sh
+ss.scroll_region(3)
+eprint('\033[2JScanning directory...', end='')
+
+
+# TODO: make this less bad
+nfile = -1
+nsize = 0
+nfiles = 0
+tsize = 0
+fpos = 0
+tstart = None
+cur_file = u''
+def status_thread():
+	last_file = u''
+	bar = ' ' * ss.w
+	while True:
+		time.sleep(0.01)
+		if last_file != cur_file:
+			last_file = cur_file
+			ueprint(cur_file)
+		
+		if nfile == -1:
+			status('Scanning directory... {0} files, {1} so far'.format(
+				human1000(nfiles), human1024(tsize)))
+		
+		elif nfiles == 0:
+			barchar = '/' if bar[-int(ss.w/5)] == ' ' else ' '
+			bar = bar[1:] + barchar
+			status(u'Processed {0} files and {1}\033[K\033[2;1H{2}'.format(
+				human1000(nfile), human1024(nsize), bar))
+		
+		else:
+			fracf = nfile * 1. / nfiles
+			fracb = (fpos + nsize) * 1. / tsize
+			if nfiles < 16*1024 \
+			and tsize / nfiles > 16*1024*1024:
+				width = fracf * 0.05 + fracb * 0.95
+			else:
+				width = fracf * 0.5 + fracb * 0.5
+			
+			bar = '='*int(width * ss.w)
+
+			barwidth = width * ss.w
+			remainder = barwidth % 1
+			bar = fullblock * int(barwidth)
+			bar += blocks[int(remainder*len(blocks))]
+			
+			msg = u'Processed {0:.2f}% files and {1:.2f}% bytes, remaining: {2} files and {3}'.format(
+				fracf*100, fracb*100, human1000(nfiles-nfile), human1024(tsize-nsize))
+			
+			if tstart is not None and tsize > 0:
+				tnow = time.time()
+				bdone = nsize + fpos
+				bleft = tsize - bdone
+				rate = bdone / max(0.01, tnow - tstart)
+				seconds = bleft / max(1, rate)
+				hours, seconds = divmod(seconds, 60*60)
+				minutes, seconds = divmod(seconds, 60)
+				msg += ', {:02d}:{:02d}:{:02d}'.format(
+					int(hours), int(minutes), int(seconds))
+			
+			status(msg + '\033[K\033[2;1H' + bar)
+
+
+thr = threading.Thread(target=status_thread)
+thr.daemon = True
+thr.start()
+
+
+stop = False
+def cleanup(signal=None, frame=None):
+	global stop
+	stop = True
+	ss.scroll_region(0)
+	if signal is None:
+		eprint('Completed')
+	else:
+		eprint('Aborting')
+	sys.exit(0)
+
+signal.signal(signal.SIGINT, cleanup)
+
+
+#v = os.statvfs('.')
+#tsize = (v.f_blocks - v.f_bfree) * v.f_bsize
+#nfiles = v.f_files
+if len(sys.argv) > 1:
+	for v in walker(b'.'):
+		if stop:
+			break
+		
+		cur_file = v[3]
+		tsize += v[2]
+		nfiles += 1
+
+
+tstart = time.time()
+eprint('\033[{}H'.format(ss.h), end='')
+
+for item in walker(b'.'):
+	if stop:
+		break
+
+	fmode, ftime, fsize, fpath = item
+	nfile += 1
+	try:
+		unicode_path = fpath.decode('utf-8', 'ignore')
+		cur_file = unicode_path
+		
+		try:
+			hasher = hashlib.sha1()
+			with open(fpath, 'rb', 512*1024) as f:
+				fpos = 0
+				for block in iter(lambda: f.read(64*1024), b''):
+					fpos += len(block)
+					hasher.update(block)
+			
+			cksum = hasher.hexdigest()
+		except:
+			cksum = 'x'*40
+		
+		ftimestr = datetime.utcfromtimestamp(ftime).strftime('%Y-%m-%d %H:%M:%S')
+		
+		uprint(u'{0:6o} {1} {2:12} {3} {4}'.format(
+			fmode, ftimestr, fsize, cksum, unicode_path))
+	
+	except Exception as ex:
+		eprint(ex)
+	
+	nsize += fsize
+
+
+cleanup()
+
+
+# pv -i 0.5 -d $(ps aux | awk '/hashwalk[ ]x/ {print $2}')

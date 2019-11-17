@@ -1,0 +1,32 @@
+#!/bin/bash
+set -e
+
+# smartmon - periodically collect SMART data from disks to logfile
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+
+[ -z "$1" ] && {
+	echo "need one or more args:"
+	echo "  sdb,nametag1"
+	echo "  sdc,nametag2"
+	echo
+	exit 1
+}
+
+while true
+do
+	ts="$(date +%Y-%m%d-%H%M%S)"
+	for pair in "$@"
+	do
+		dev="${pair%%,*}"
+		tag="${pair##*,}"
+		fn="$tag-$ts"
+		
+		smartctl -x /dev/$dev > "$fn" ||
+			true
+			#echo "smart failed for $fn (code $?)"
+
+		grep Temperature_Celsius "$fn"
+	done
+	sleep 60
+done
+

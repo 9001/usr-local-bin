@@ -1,0 +1,163 @@
+#!/bin/bash
+set -e
+
+# dvdimport - for optical media in good condition
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+# -- mounts a cd/dvd and copies the contents to home directory,
+# -- then creates recursive file listing + sha1 checksums of the files
+#
+# assumes dvd output $home/dvd/$title
+
+home=~ed
+
+which md5walk >/dev/null || exit 1
+
+now="$(date +%Y-%m%d-%H%M)"
+
+dev="$1"
+photo_fn="$2"
+[ -z "$photo_fn" ] && {
+	echo "need arg 1: device"
+	echo "need arg 2: photo filename (HHMMSS)"
+	echo
+	echo "example:"
+	echo "  $0  /dev/sr0  meh"
+	echo
+	exit 1
+}
+dev="${dev%/}"
+dev="${dev##*/}"
+
+# keep dmesg running in the background
+# to see info about medium read errors
+(
+	dmesg -wTLalways > >(
+		grep $dev -C3 --line-buffered |
+		tee $home/dmesg.$dev
+	)
+) &
+dmesg_pid=$!
+sleep 0.5
+
+# kill dmesg when we exit
+cln() {
+	rv=$?
+	umount $home/$dev || true
+	rmdir $home/$dev || true
+	kill $dmesg_pid || true
+	
+	[ -z "$title" ] &&
+	[ $eject -eq 1 ] &&
+		eject /dev/$dev
+	
+	exit $rv
+}
+eject=0
+trap cln EXIT
+trap cln ERR
+
+mkdir -p $home/$dev $home/dvd
+
+# show volume name and timestamp etc
+printf '\n\033[40m\033[K\033[0m\n\nblkid...\n'
+blkid /dev/$dev || {
+	printf '\033[1;31mcould not blkid; blank disk?\033[0m\n'
+}
+sleep 0.1
+
+# mount the cd
+printf '\n\033[40m\033[K\033[0m\n\n'
+mount /dev/$dev $home/$dev || {
+	echo
+	#dmesg | tail -n 20
+	exit 1
+}
+sleep 0.1
+
+# list contents
+printf '\n\033[40m\033[K\033[0m\n\n'
+ls -al $home/$dev
+eject=1
+
+# ask for output folder
+printf '\n\033[40m\033[K\033[0m\n\n'
+while true
+do
+	read -u1 -rp 'disc-title> '
+	title="$REPLY"
+	
+	[ -e $home/dvd/"$title" ] ||
+		break
+	
+	ls -1 $home/dvd | grep -F "$title"
+	printf '\033[1;31mexists; retry\033[0m\n'
+done
+
+#read -u1 -rp 'photo-fn> '
+#photo="$REPLY"
+
+# copy contents
+cp -pvR $home/$dev $home/dvd/"$title" 2> >(
+	sleep 3.14
+	tee $home/dvd/"$title"/dvdimport-$now.err >&2
+) &&
+	echo copying completed successfully ||
+	echo copying failed with errorcode $?
+
+
+# write info file
+{
+	blkid /dev/$dev
+	echo
+	echo "$photo"
+} > $home/dvd/"$title"/dvdimport-$now.txt
+
+echo terminating dmesg
+kill $dmesg_pid
+gzip -c <$home/dmesg.$dev >$home/dvd/"$title"/dvdimport-$now.dmesg
+rm $home/dmesg.$dev
+
+echo creating file listing...
+echo 3 > /proc/sys/vm/drop_caches || true
+rfl() { find -type f -printf '%p // %l [%M/%s/%g:%u] @%T@\n' | sed -r 's/\.[0-9]+$//' | pv | sort; }
+(cd $home/$dev && rfl > $home/dvd/"$title"/dvdimport-$now.lst)
+
+# padding to avoid losing info (md5walk discards current screen with scroll-regions)
+head -c $(tput lines 2>/dev/null || echo 64) /dev/zero | tr '\0' '\n'
+
+echo hashing
+(cd $home/$dev && md5walk x > $home/dvd/"$title"/dvdimport-$now.mdw)
+
+cd $home/dvd/"$title"
+
+# verify file listing
+nerr=0
+while IFS= read -r x; do
+	[ -e "$x" ] && continue
+	printf 'MISSING: %s\n' "$x"
+	nerr=$((nerr+1))
+done < <(
+	cat dvdimport-$now.lst |
+	sed -r 's` // .*``'
+)
+[ $nerr -eq 0 ] &&
+	printf '\033[32mall files are present\033[0m\n' ||
+{
+	printf '\033[1;31mERROR: missing $nerr files\033[0m\n'
+	exit 1
+}
+
+# verify checksums
+cat dvdimport-$now.mdw |
+sed -r 's/^[^0-9]*[0-9]+ [0-9-]{10} [0-9:]{8} +[0-9]+ //;s/ /  /' |
+sha1sum -c &&
+	printf '\033[32mall files were correctly copied\033[0m\n' ||
+{
+	printf '\033[1;31mERROR: incorrect checksum in some files\033[0m\n'
+	exit 1
+}
+
+# done
+printf '\033[32msuccess; cleanup...\033[0m\n'
+umount $home/$dev
+eject /dev/$dev &

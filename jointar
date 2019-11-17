@@ -1,0 +1,146 @@
+#!/bin/bash
+set -e
+
+# jointar - unpack archives which are split across multiple disks
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+#
+# extracts a tar file which is split across multiple CDs/DVDs/Blureis
+# without first merging the files and wasting disk space
+# thus you only get one shot, do not miss your chance to blow
+
+srcpath=/media/cdrom
+
+[ "$#" -ge 4 ] || {
+	echo "need arg 1: sum type"
+	echo "need arg 2: sum filename pattern"
+	echo "need arg 3: archive filename pattern"
+	echo "need arg 4: tar arguments"
+	echo
+	echo "examples:"
+	echo "  $0  md5   '\.md5$'  '\.[0-9]+$'  -zxv"
+	echo "  $0  sha1  '\.a1$'   '\.a[a-z]$'  -Ipixz -xv"
+	echo
+	echo "expect input files in /media/cdrom/"
+	echo "expect you to mount new volumes and verify files during extract"
+	exit 1
+}
+
+sumtype="$1"
+sumptn="$2"
+arcptn="$3"
+shift 3
+tar_args=("$@")
+
+sumtmp=$(mktemp)
+cln() {
+	rm -f $sumtmp
+}
+trap cln EXIT
+trap cln ERR
+
+_msg() {
+	local c=$1
+	shift
+	printf '\033[1;37;4%dmjointar> %s\033[0m\n' $c "$*" >&2
+}
+emsg() { _msg 1 "$@"; }
+msg()  { _msg 4 "$@"; }
+
+_get_file() {
+	find -maxdepth 1 -L -type f |
+	grep -E "$1" |
+	cut -c3-
+}
+get_sumfile()  { _get_file "$sumptn"; }
+get_arcfiles() { _get_file "$arcptn"; }
+
+stream_archive() {
+	while true
+	do
+		y=; n=
+		while true
+		do
+			msg "now idle;"
+			msg "$srcpath is not being accessed by me."
+			msg "mount next disk and press Y, or terminate with N"
+			read -n1 -r r
+			echo >&2
+			
+			[[ $r =~ ^[yY]$ ]] && y=1
+			[[ $r =~ ^[nN]$ ]] && n=1
+			[ $y ] || [ $n ] && break
+		done
+		[ $n ] && break
+		
+		# access $srcpath in a subprocess to avoid
+		# blocking unmount after reading the fragments
+		(
+			cd $srcpath
+			
+			get_sumfile | wc -l | grep -qE '^1$' || {
+				emsg could not find sumfile
+				exit 0
+			}
+			sumfile="$(get_sumfile)"
+			msg "using sumfile [$sumfile]"
+			
+			get_arcfiles >/dev/null || {
+				emsg could not find archives
+				exit 0
+			}
+			nfiles=$(get_arcfiles | wc -l)
+			msg "collecting $nfiles archive fragments..."
+			
+			get_arcfiles |
+			while IFS= read -r arcfn
+			do
+				msg "reading [$arcfn]"
+				
+				# compute checksum while streaming out the
+				# archive data to the function's stdout
+				tee >(
+					${sumtype}sum | awk '{print $1}' > $sumtmp
+				) <"./$arcfn"
+				
+				# get expected hash from sumfile
+				goodhash=''
+				while IFS=' ' read -r sf1 sf2
+				do
+					[ "$sf2" = "$arcfn" ] ||
+						continue
+					
+					goodhash="$sf1"
+					break
+				done < <(
+					grep -F -- "$arcfn" "$sumfile" |
+					sed -r 's/ ./ /'
+				)
+				
+				[ -z "$goodhash" ] && {
+					emsg "could not find [$arcfn] in [$sumfile]"
+					exit 1
+				}
+				
+				comphash="$(cat $sumtmp)"
+				
+				[ "$goodhash" = "$comphash" ] &&
+					msg "hash OK for [$arcfn]" ||
+				{
+					emsg "incorrect hash for [$arcfn]"
+					emsg "[$goodhash] expected"
+					emsg "[$comphash] computed"
+					exit 1
+				}
+			done
+		)
+		msg "trying to unmount and eject the volume..."
+		umount $srcpath && eject &&
+			msg "nice" ||
+			emsg "failed; check lsof and do the needful"
+		
+	done
+}
+
+stream_archive |
+# tee /dev/shm/arcdata | 
+tar "${tar_args[@]}"

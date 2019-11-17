@@ -1,0 +1,65 @@
+#!/bin/bash
+set -e
+
+# xcode-dir - transcode all multimedia files in a folder
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+# -- provide any argument to enable dry-run
+# -- detects partial transcodes comparing HH:MM:SS of input/output files
+
+crf=32
+preset=slow
+
+dryrun="$1"
+
+enc() {
+	FFREPORT="level=32:file=$of.fflog" ffmpeg -hide_banner -nostdin -y -vsync vfr -i "$fn" -map 0:v -map 0:a \
+		-max_muxing_queue_size 99999 -acodec copy -vcodec libx265 -crf $crf -pix_fmt yuv420p -preset $preset "$of"
+	
+	printf '\nffenc: original file last-modified %s, size %s\n' \
+		"$(date -ur "$1" +'%Y-%m-%d %H:%M:%S')" \
+		"$(stat -c%s -- "$1")" \
+		>> "$of.fflog"
+}
+
+getlen() {
+	fn="$1"
+
+	# video stream (fails on incomplete mkv)
+	# ffprobe -v fatal -select_streams v:0 -show_entries stream=duration -of default=noprint_wrappers=1:nokey=1 "$1" | sort -n | tail -n 1
+
+	# container (maybe bogus data on corrupt ts? just a hunch)
+	# ffprobe -v fatal -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$1" | sort -n | tail -n 1
+	
+	# lowest pts in the first 6 sec, and highest pts during gop at 999999sec (usually min/max of entire file)
+	pts1=$(ffprobe -hide_banner -v fatal -select_streams v:0 -show_entries packet=pts_time -of compact=p=0:nk=1 -read_intervals %+6 "$fn" | awk '$1>0.5 && (!v || $1<v) {v=$1} END {print v}')
+	pts2=$(ffprobe -hide_banner -v fatal -select_streams v:0 -show_entries packet=pts_time -of compact=p=0:nk=1 -read_intervals 999999 "$fn" | awk '$1>v {v=$1} END {print v}')
+	
+	#printf '[%s] [%s]\n' "$pts1" "$pts2" >&2
+	awk "BEGIN {print $pts2-$pts1}" 2>/dev/null || echo 0
+}
+
+for fn in *.ts
+do
+	echo
+	of="$fn.x265-crf$crf-$preset.mkv"
+	[ -e "$of" ] && {
+		len1=$(getlen "$fn")
+		len2=$(getlen "$of")
+		printf '%8.2f %8.2f ' "$len1" "$len2"
+		
+		awk "END {if ($len1-$len2>5 && $len2/$len1<0.97) {exit 1}}" </dev/null && {
+			printf '%s  \033[32mskip\033[0m\n' "$fn"
+			continue
+		}
+		printf '%s  \033[31mtranscode\033[0m\n' "$fn"
+	} ||
+		printf '%8s %8s %s  \033[35mJUST\033[0m\n' -.-- -.-- "$fn"
+	
+	[ -z "$dryrun" ] ||
+		continue
+	
+	enc "$fn" || {
+		printf '\nffenc: failed with retval %s\n' $? >> "$of.fflog"
+		sleep 10
+	}
+done

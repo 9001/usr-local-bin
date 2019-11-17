@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# isotoc - shows file listing for iso file or an inserted cd/dvd/blurei
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+
+sz=$(
+	isoinfo -d -i "$1" |
+	awk '/^Volume size/ {print $NF}'
+)
+
+xorriso -indev "$1" -error_behavior image_loading best_effort -abort_on NEVER -find . -exec report_lba |
+awk -v sz=$sz '{printf "%08d  %6.2f%%  %s\n", $6, ($6*100)/sz, $0}' |
+sort

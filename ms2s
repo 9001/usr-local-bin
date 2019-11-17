@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+
+"""
+converts "4m  123.456" (bash time) into seconds
+"""
+
+import re
+import sys
+
+def main():
+	ptn = re.compile(r'0*([0-9]+)m {0,2}0*([0-9][0-9\.]+)([^0-9\.]|$)')
+	for ln in sys.stdin.buffer:
+		ln = ln.decode('utf-8', 'replace').rstrip()
+		ofs = 0
+		oln = ''
+		for m in ptn.finditer(ln):
+			oln += ln[ofs:m.start()]
+			oln += '{:.3f}'.format(int(m[1])*60 + float(m[2]))
+			ofs = m.end()
+		
+		oln += ln[ofs:]
+		print(oln)
+
+if __name__ == '__main__':
+	main()

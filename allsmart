@@ -1,0 +1,69 @@
+#!/bin/bash
+set -e
+
+# allsmart - display a short SMART summary for /dev/sd*
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+
+vfmt="%-32s %-20s %5.2f GiB %4s %6s %s\n"
+sfmt="%-32s %-20s %9s %4s %6s %s\n"
+rm -f /dev/shm/allsmart.*
+devs=()
+
+for dev in sd{a..z}
+do
+	[ -e /dev/$dev ] ||
+		continue
+	
+	devs+=($dev)
+	touch /dev/shm/allsmart.busy.$dev
+	{
+		smartctl -a /dev/$dev 2>/dev/shm/allsmart.err.$dev |
+		awk -v fmt="$vfmt" '
+			BEGIN {err=0}
+			{v=$0;sub(/[^:]+:\s+/,"",v)}
+			/^Model Family:/ {model=v}
+			/^Serial Number:/ {serial=v}
+			/^User Capacity:/ {sub(/ .*/,"",v);gsub(/,/,"",v);size=v/(1024*1024*1024*1024)}
+			/Temperature_Celsius/ {temp=$10}
+			/Reallocated_Sector_Ct|Reallocated_Event_Count|Current_Pending_Sector|Offline_Uncorrectable/ {err+=$10}
+			/^SMART overall-health self-assessment test result:/ {health=v}
+			END {printf fmt, substr(model, 1, 32), serial, size, temp, err, health}
+		' >/dev/shm/allsmart.out.$dev &&
+		rm /dev/shm/allsmart.busy.$dev &
+	} 2>/dev/null
+done
+
+
+report() {
+	printf "\033[Hdev  $sfmt" model-name serial size temp error health-status
+	
+	nbusy=0
+	for dev in "${devs[@]}"
+	do
+		echo -n "$dev  "
+		[ -e /dev/shm/allsmart.busy.$dev ] && {
+			printf '\033[K\n'
+			nbusy=$((nbusy+1))
+			continue
+		}
+		printf '%s\033[K\n' "$(cat /dev/shm/allsmart.out.$dev)"
+	done
+	
+	printf '\033[J'
+	[ $nbusy -eq 0 ]
+}
+
+
+[ "$1" = "-s" ] && {
+	wait
+	report || true
+} ||
+	while true
+	do
+		sleep 0.1
+		report && break
+	done
+
+cat /dev/shm/allsmart.err.* 2>/dev/null
+
+rm -f /dev/shm/allsmart.*

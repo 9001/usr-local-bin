@@ -1,0 +1,75 @@
+#!/usr/bin/env python
+from __future__ import print_function
+import sys
+import tarfile
+import hashlib
+from datetime import datetime
+
+
+"""hashtar.py: checksum tar contents without unpacking"""
+__version__   = "1.0"
+__author__    = "ed <hashtar@ocv.me>"
+__credits__   = ["stackoverflow.com"]
+__license__   = "MIT"
+__copyright__ = 2018
+
+
+def eprint(*args, **kwargs):
+	kwargs['file'] = sys.stderr
+	print(*args, **kwargs)
+
+
+try:
+	mode = sys.argv[1].lower()
+except:
+	mode = None
+
+if mode not in ['s','i']:
+	eprint()
+	eprint('expects uncompressed tar on stdin')
+	eprint('will produce sha1 checksums on stdout')
+	eprint()
+	eprint('usage: {0} <s|i>'.format(sys.argv[0]))
+	eprint('  s: just hash and filename')
+	eprint('  i: also size and last-modified')
+	eprint()
+	sys.exit(1)
+
+
+if sys.version_info[0] > 2:
+	stdin = sys.stdin.buffer
+else:
+	if sys.platform == 'win32':
+		import os, msvcrt
+		msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
+	stdin = sys.stdin
+
+
+# will use blocksize 20*512 = 10KiB
+tar = tarfile.open(mode='r|', fileobj=stdin)
+
+for ti in tar:
+	if not ti.isreg():
+		continue
+	
+	tf = tar.extractfile(ti)
+	hasher = hashlib.sha1()
+	while True:
+		buf = tf.read(20*512)
+		if not buf:
+			break
+		hasher.update(buf)
+	
+	cksum = hasher.hexdigest()
+	
+	if mode == 's':
+		print('{}  {}'.format(
+			cksum, ti.name))
+	
+	if mode == 'i':
+		mtime = datetime.utcfromtimestamp(ti.mtime)
+		mtime = mtime.strftime('%Y-%m-%d %H:%M:%S')
+		print('{:6o} {} {:>12} {} {}'.format(
+			ti.mode, mtime, ti.size, cksum, ti.name))
+
+tar.close()

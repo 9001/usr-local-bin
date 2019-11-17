@@ -1,0 +1,58 @@
+#!/bin/bash
+set -e
+
+# undup-scene-stuff - find duplicate split-rar folders
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+# -- opens ranger windows for each dupe found
+
+[ -z "$2" ] && {
+	echo "need arg 1: rfl file"
+	echo "need arg 2: base path to prepend for each entry in rfl file"
+	echo "optionally add additional pairs of these"
+	exit 1
+}
+
+
+
+rm -f /dev/shm/scenecache
+
+while true
+do
+	[ -z "$2" ] &&
+		break
+	
+	cat -- "$1" |
+	awk -v p="$2" '{sub(/ \/\/ .*/,""); printf "%s/%s\n", p, $0}'
+	
+	shift 2
+done |
+grep -E '\.(part[0-9]{2,3}\.rar|r[0-9]{2})$' |
+while IFS= read -r p
+do
+	f="${p##*/}"
+	grep -F "/$f" /dev/shm/scenecache &&
+		printf '%s\n' "$p"
+	
+	printf '%s\n' "$p" >> /dev/shm/scenecache
+done |
+awk '{sub(/\/[^\/]+$/,""); if (NR%2==0) {printf "%s // %s\n", v, $0} v=$0}' |
+uniq |
+tee /dev/shm/scenedupes
+
+
+
+cat /dev/shm/scenedupes |
+while IFS= read -r x
+do
+	d1="$(printf '%s\n' "$x" | sed -r 's` // .*``')"
+	d2="$(printf '%s\n' "$x" | sed -r 's`.* // ``')"
+	xfce4-terminal --disable-server --maximize -x ranger -- "$d1" "$d2"
+done 
+
+
+
+exit 0
+
+rm -f /dev/shm/scenecache; { cat /dev/shm/zq1 | sed -r 's` // .*``;s`^.`/mnt/zq1`';   cat /dev/shm/old | sed -r 's` // .*``';   } | grep -E '\.(part[0-9]{2,3}\.rar|\.r[0-9]{2})$' | while IFS= read -r p; do f="${p##*/}"; grep -F "/$f" /dev/shm/scenecache && printf '%s\n' "$p"; printf '%s\n' "$p" >> /dev/shm/scenecache; done | awk '{sub(/\/[^\/]+$/,""); if (NR%2==0) {printf "%s // %s\n", v, $0} v=$0}' | uniq | tee /dev/shm/scenedupes
+
+cat /dev/shm/scenedupes | while IFS= read -r x; do d1="$(printf '%s\n' "$x" | sed -r 's` // .*``')"; d2="$(printf '%s\n' "$x" | sed -r 's`.* // ``')"; xfce4-terminal --disable-server --maximize -x ranger -- "$d1" "$d2"; done 

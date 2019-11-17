@@ -1,0 +1,41 @@
+#!/bin/bash
+set -e
+
+# bindiff - compare two files, print hexdump of differences
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+
+[ -z "$2" ] && {
+	echo "need arg 1: file 1"
+	echo "need arg 2: file 2"
+	exit 1
+}
+
+f1="$1"
+f2="$2"
+
+ofs=0
+mbyte=0
+bs=4096
+nb=256
+
+cdiff() {
+	diff -NarU7 -- "$1" "$2" |
+	sed -r "$(printf 's/^-/\033[1;31m-/;s/^\+/\033[1;32m+/;s/^/\033[1;30m/;s/$/\033[0m/')"
+}
+
+while true
+do
+	dd if="$f1" bs=$bs count=$nb skip=$ofs > /dev/shm/dp1 2>/dev/null
+	dd if="$f2" bs=$bs count=$nb skip=$ofs > /dev/shm/dp2 2>/dev/null
+	
+	echo @ $mbyte MiB
+	ofs=$((ofs+nb))
+	mbyte=$((mbyte+1))
+	
+	[ $(stat -c%s /dev/shm/dp1) -eq 0 ] && echo eof 1 && break
+	[ $(stat -c%s /dev/shm/dp2) -eq 0 ] && echo eof 2 && break
+	
+	sha512sum /dev/shm/dp{1,2} | uniq -w128 | wc -l | grep -q 1 && continue
+	
+	cdiff <(xxd < /dev/shm/dp1) <(xxd < /dev/shm/dp2)
+done

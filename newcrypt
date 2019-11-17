@@ -1,0 +1,79 @@
+#!/bin/bash
+set -e
+
+# newcrypt - luks-encrypt a device + create btrfs filesystem on it
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+
+dev="${1##*/}"
+
+[ -z "$dev" ] && {
+	echo need arg 1: sda/sdb/sdc/...
+	exit 1
+}
+
+# locate device in /sys/block
+pdev="$dev"
+blkpath="/sys/block/$dev"
+while [ ! -e "$blkpath" ]
+do
+	pdev="${pdev%?}"
+	blkpath="/sys/block/$pdev/$dev"
+done
+[ -z "$pdev" ] && {
+	echo bug
+	exit 1
+}
+
+# show smart data
+printf '\n\033[36mSMART:\033[0m\n'
+smartctl -i /dev/$pdev | awk '/^(Model Family|Device Model|Serial Number|User Capacity|Sector Sizes?|Rotation Rate):/'
+
+# list all aliases for this disk
+printf '\n\033[36maliases:\033[0m\n'
+find /dev/disk/by-id -printf '%f %l\n' |
+awk -v v="$pdev" '$0~"/"v"$" {print $1}'
+
+# and lsblk info
+printf '\n\033[36mlsblk:\033[0m\n'
+lsblk "/dev/$pdev"
+
+# and blkid info
+printf '\n\033[36mtarget:\033[0m\n'
+blkid "/dev/$dev" || true
+printf '\033[36mon the same dev:\033[0m\n'
+blkid "/dev/$pdev"* || true
+
+echo
+#printf 'ok? press enter:'
+#read -u1 -r
+
+cryptsetup --type=luks2 -c aes-xts-essiv:sha256 -h sha512 -s 512 --pbkdf=argon2id --pbkdf-force-iterations=50 --pbkdf-memory=1048576 --pbkdf-parallel=4 luksFormat /dev/$dev
+
+printf '\n\033[36mpartprobe...\033[0m\n'
+partprobe /dev/$dev || true
+
+printf '\n\033[36muopen...\033[0m\n'
+while true
+do
+	uopen $dev && break || true
+
+	[ -e /dev/mapper/$dev ] || {
+		printf '\nretry? [y/N]: '
+		read -u1 -r
+		echo
+		printf '%s\n' "$REPLY" |
+		grep -E '^[yY]$' ||
+			break
+	}
+done
+
+printf '\ncreate btrfs filesystem? [y/N]: '
+read -u1 -r
+echo
+printf '%s\n' "$REPLY" |
+grep -E '^[yY]$' ||
+	exit 0
+
+mkfs.btrfs /dev/mapper/$dev
+mount /dev/mapper/$dev /mnt/$dev
+

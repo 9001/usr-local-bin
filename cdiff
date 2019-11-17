@@ -2,6 +2,6 @@
 set -e
 
 # cdiff - colored diff
-# ed <irc.rizon.net> MIT-licensed
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
 
-diff -NarU7 "$@" | sed -r "$(printf 's/^-/\033[1;31m-/;s/^\+/\033[1;33m+/;s/$/\033[0m/')"
+diff -NarU7 "$@" | sed -r "$(printf 's/^-/\033[1;31m-/;s/^\+/\033[1;33m+/;s/^/\033[1;30m/;s/$/\033[0m/')"

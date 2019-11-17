@@ -1,0 +1,65 @@
+#!/usr/bin/env perl
+
+# fd-eta - monitor access to a filedescriptor, show read/write speed, provide eta if read
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+
+use strict;
+use Time::HiRes qw(time usleep);
+
+if (@ARGV != 1) {
+	print "need arg 1: fd\n\n";
+	print "usage:\n";
+	print "  cd /proc/<PID>\n";
+	print "  ls -al fd\n";
+	print "  $0 3\n\n";
+	die;
+}
+
+my $nhist = 15;
+
+my $fd = int($ARGV[0]);
+my $fpath = readlink "fd/$fd";
+my $fsize = -s $fpath;
+
+print "using fd $fd = $fpath\n";
+
+my @hist;
+while (1==1) {
+	open my $fh, "<", "fdinfo/$fd";
+	my $t = time;
+	my $p = <$fh> =~ s/[^0-9]+//r;
+	close $fh;
+	push @hist, [$t,$p];
+	if (scalar @hist > $nhist) {
+		shift @hist;
+	}
+	my $t1 = $hist[0][0];
+	my $p1 = $hist[0][1];
+	my $td = $t-$t1;
+	my $pd = $p-$p1;
+	my $rem = $fsize-$p;
+	my $bps = 0;
+	if ($td > 0) {
+		$bps = $pd/$td;
+	};
+	my $prc = 8.888;
+	my $es = 0;
+	my $em = 0;
+	if ($rem > 0) {
+		$prc = (100*$p/$fsize);
+		if ($bps > 0) {
+			$es = $rem/$bps;
+		}
+	}
+	$em = int($es/60);
+	$es -= $em*60;
+	printf("%.3f GB total, %.3f GB done, %.3f%%, %.3f MB/s, eta %dmin %2dsec\n",
+		$fsize/(1024*1024*1024),
+		$p/(1024*1024*1024),
+		$prc,
+		$bps/(1024*1024),
+		$em,
+		$es
+	);
+	usleep 500*1000;
+}
