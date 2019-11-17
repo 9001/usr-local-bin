@@ -25,7 +25,7 @@ set -e
 #   ./hd/t5/revo.dd.tar.gz //  [-rwxr-xr-x/20656344319/ed:ed] @1247779616
 #
 # reference rfl generator:
-#   exec find "$@" \( -type f -or -type l \) -printf '%p // %l [%M/%s/%g:%u] @%T@\n' | sed -r 's/\.[0-9]+$//'
+#   exec find "$@" \( -type f -or -type l \) -printf '%p // %l [%M/%s/%g:%u] @%T@\0' | tr '\n\0' ' \n' | sed -r 's/\.[0-9]+$//'
 
 
 [ -z "$1" ] ||
