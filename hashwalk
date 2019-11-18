@@ -306,7 +306,7 @@ if len(sys.argv) > 1:
 		if stop:
 			break
 		
-		cur_file = v[3]
+		cur_file = v[3].decode('utf-8', 'ignore')
 		tsize += v[2]
 		nfiles += 1
 
