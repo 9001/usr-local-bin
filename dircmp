@@ -96,7 +96,7 @@ show() {
 	scan "$@"
 
 printf '\033[1;35m'
-cmp /dev/shm/dircmp.*f && {
+cmp /dev/shm/dircmp.{1,2} && {
 	printf "\033[0;1;37;44m\033[Jfolders are identical\n\033[0m"
 	exit 0
 }

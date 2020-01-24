@@ -106,7 +106,7 @@ def main():
 	
 	if sfv:
 		print("\nthese didn't have crc in the filename so here's an sfv:")
-		print("xclip -o > /dev/shm/tf; sha1sum /dev/shm/tf <(cat *.sfv | tr -d '\r')")
+		print(r"xclip -o > /dev/shm/tf; sha1sum /dev/shm/tf <(cat *.sfv | tr -d '\r')")
 		print(sfv)
 	
 	if fails:

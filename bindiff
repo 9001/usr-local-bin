@@ -7,6 +7,8 @@ set -e
 [ -z "$2" ] && {
 	echo "need arg 1: file 1"
 	echo "need arg 2: file 2"
+	echo "optional args:"
+	echo "  -k abort on first diff"
 	exit 1
 }
 
@@ -38,4 +40,7 @@ do
 	sha512sum /dev/shm/dp{1,2} | uniq -w128 | wc -l | grep -q 1 && continue
 	
 	cdiff <(xxd < /dev/shm/dp1) <(xxd < /dev/shm/dp2)
+	
+	[ -z "$3" ] ||
+		break
 done
