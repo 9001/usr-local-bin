@@ -16,8 +16,8 @@ from datetime import datetime
 hashwalk.py: recursive sha1 checksum
              (runs faster in py3 than in py2)
 """
-__version__   = "1.2"
-__date__      = "2019-03-25"
+__version__   = "1.3"
+__date__      = "2020-03-29"
 __author__    = "ed <hashwalk@ocv.me>"
 __url__       = "https://ocv.me/dev/?hashwalk.py"
 __credits__   = ["stackoverflow.com"]
@@ -126,7 +126,10 @@ class CTermsize(object):
 		self.scroll_top = 0
 		self.w, self.h = termsize()
 		
-		signal.signal(signal.SIGWINCH, self.ev_sig)
+		try:
+			signal.signal(signal.SIGWINCH, self.ev_sig)
+		except:
+			return
 		
 		thr = threading.Thread(target=self.worker)
 		thr.daemon = True
@@ -192,16 +195,26 @@ def status(msg):
 
 
 def walker(top):
-	for fn in sorted(os.listdir(top)):
+	try:
+		items = os.listdir(top)
+	except:
+		return
+	
+	for fn in sorted(items):
 		path = os.path.join(top, fn)
 		if path[:2] == b'./':
 			path = path[2:]
-		if os.path.islink(path):
+		
+		try:
+			sr = os.lstat(path)
+			mode = sr.st_mode
+		except:
 			continue
 		
-		sr = os.stat(path)
-		mode = sr.st_mode
-		if stat.S_ISDIR(mode):
+		if stat.S_ISLNK(mode):
+			continue
+		
+		elif stat.S_ISDIR(mode):
 			if not excl_mask.search(path):
 				# py2 gets mad if we mention «yield from» at all
 				for v in walker(path):
@@ -225,13 +238,15 @@ nsize = 0
 nfiles = 0
 tsize = 0
 fpos = 0
+stop = False
 tstart = None
 cur_file = u''
 def status_thread():
 	last_file = u''
 	bar = ' ' * ss.w
-	while True:
+	while not stop:
 		time.sleep(0.01)
+		
 		if last_file != cur_file:
 			last_file = cur_file
 			ueprint(cur_file)
@@ -279,15 +294,14 @@ def status_thread():
 			status(msg + '\033[K\033[2;1H' + bar)
 
 
-thr = threading.Thread(target=status_thread)
-thr.daemon = True
-thr.start()
+status_thr = threading.Thread(target=status_thread)
+status_thr.start()
 
 
-stop = False
 def cleanup(signal=None, frame=None):
 	global stop
 	stop = True
+	status_thr.join()
 	ss.scroll_region(0)
 	if signal is None:
 		eprint('Completed')

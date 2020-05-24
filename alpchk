@@ -133,6 +133,11 @@ class ApkParser(object):
 			if m_ver:
 				current_ver = m_ver.group(1)
 				continue
+
+			if x == '  :':
+				err('package [{}] has garbage versions'.format(name))
+				current_ver = "NULLVERSION"
+				continue
 			
 			if m_name:
 				discovered += 1

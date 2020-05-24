@@ -11,7 +11,7 @@ set -e
 		onedev=
 }
 
-f=/dev/shm/uopen
+f=$(mktemp -p /dev/shm/ uopen.XXXXX)
 cln() {
 	rv=$?
 	head -c 64 /dev/urandom > $f

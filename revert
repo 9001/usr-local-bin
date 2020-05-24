@@ -6,18 +6,21 @@ import sys
 import os
 
 """revert.py: File Revert Utility"""
-__version__   = "1.2"
+__version__   = "1.3"
 __author__    = "ed <revert@ocv.me>"
 __credits__   = ["stackoverflow.com"]
 __license__   = "MIT"
 __copyright__ = "2017"
 
+"""
+this supports both py2 and py3
+but as usual py2 is faster
+"""
 
 # most virtual disk images are aligned to 1 MB
 BUFSIZE=1024*1024*1
-# but since we will be writing to a spinner disk we can safely go lower,
-# 4 kB seems optimal on this particular drive according to the dd test
-# ...except python being slow means 64kb (this script in blksize mode)
+# but if you're doing other binary files and
+# you're on spinning rust then 64kB is recommended
 #BUFSIZE=1024*64
 
 # DEBUG: fake writes, don't modify target
@@ -46,6 +49,16 @@ if len(sys.argv) < 2:
 	p()
 	exit(1)
 
+
+if sys.version_info >= (3,0):
+	stdin = sys.stdin.buffer
+else:
+	if sys.platform == 'win32':
+		import msvcrt
+		msvcrt.setmode(sys.stdin.fileno(), os.O_BINARY)
+	stdin = sys.stdin
+
+
 # bash version:
 # writes=8; blksize=$((4096*1024)); value=0; while [[ $blksize -gt 1 ]]; do value=$((value+1)); dir="$(pwd)"; cd /dev/shm; printf "\x$(printf '%02x' $value)" > ddt1; for n in {1..7}; do cat ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 > ddt2; mv ddt2 ddt1; done; t0=$(date +%s%N); dd if=ddt1 bs=$blksize count=$writes of="$dir/ddtmp" 2>/dev/null >/dev/null ; t1=$(date +%s%N); printf 'ms %d blksize %d writes %d\n' $(( (t1-t0)/1000000 )) $blksize $writes; blksize=$((blksize/2)); writes=$((writes*2)); done
 if sys.argv[1].lower() == 'blksize':
@@ -53,11 +66,11 @@ if sys.argv[1].lower() == 'blksize':
 	# leaving it in for reference
 	#import ctypes
 	#libc = ctypes.CDLL('libc.so.6')
-	with open('blksize', 'wb') as f:
+	with open('blksize', 'wb', 1024*1024*4) as f:
 		value = 0
 		writes = 2
 		blksize = 4096 * 1024 * 32
-		byte = struct.pack('B', value)
+		byte = struct.pack(b'B', value)
 		buf = byte * blksize
 		for write in range(writes):
 			f.write(buf)
@@ -67,7 +80,7 @@ if sys.argv[1].lower() == 'blksize':
 			times = []
 			for redo in range(4):
 				value += 1
-				byte = struct.pack('B', value)
+				byte = struct.pack(b'B', value)
 				buf = byte * blksize
 				f.seek(0)
 				t0 = time.time()
@@ -83,7 +96,7 @@ if sys.argv[1].lower() == 'blksize':
 			writes *= 2
 	exit(0)
 
-f = open(sys.argv[1], 'r+b')
+f = open(sys.argv[1], 'r+b', BUFSIZE)
 f.seek(0, os.SEEK_END)
 len_file = f.tell()
 len_orig = 0
@@ -113,7 +126,7 @@ t0 = time.time()
 nsubs = 64
 while nsubs > 0:
 	f.seek(len_orig)
-	orig16 = sys.stdin.read(BUFSIZE*nsubs)
+	orig16 = stdin.read(BUFSIZE*nsubs)
 	used16 = f.read(BUFSIZE*nsubs)
 	for subseg in range(nsubs):
 		orig = orig16[BUFSIZE*subseg:BUFSIZE*(subseg+1)]
@@ -183,7 +196,7 @@ exit(0)
 n = 0
 while True:
 	n += 1
-	buf = sys.stdin.read(BUFSIZE)
+	buf = stdin.read(BUFSIZE)
 	sz = len(buf)
 	if sz < BUFSIZE:
 		p(n, len(buf))

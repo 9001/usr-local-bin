@@ -74,6 +74,6 @@ printf '%s\n' "$REPLY" |
 grep -E '^[yY]$' ||
 	exit 0
 
-mkfs.btrfs /dev/mapper/$dev
-mount /dev/mapper/$dev /mnt/$dev
-
+ov=${dev}_ov
+mkfs.btrfs /dev/mapper/$ov
+mount /dev/mapper/$ov /mnt/$ov

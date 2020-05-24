@@ -63,6 +63,7 @@ scan() {
 
 show() {
 	printf 'dir: %s\n' "$d1" "$d2"
+	printf '%s\n' $(head -c 72 /dev/zero | tr '\0' -)
 	
 	printf '\033[1;31m\n'
 	diff -NarU1 /dev/shm/dircmp.*f |
@@ -88,6 +89,7 @@ show() {
 	sed -r 's/^/ALTER: /'
 	printf '\033[0m\n'
 
+	printf '%s\n' $(head -c 72 /dev/zero | tr '\0' -)
 	printf 'dir: %s\n' "$d1" "$d2"
 	printf '\nmerged output: cdiff /dev/shm/dircmp.{1,2}\n'
 }

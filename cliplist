@@ -1,0 +1,24 @@
+#!/bin/bash
+set -e
+
+command -v xclip >/dev/null && cb() { xclip -o; }
+command -v xsel  >/dev/null && cb() { xsel -o; }
+
+# watch clipboard; list all unique values
+while true
+do
+	sleep 0.2
+	
+	printf '\033[31m' >&2
+	p="$(cb)" || {
+		printf '\033[A' >&2
+		continue
+	}
+	
+	[ "$p" = "$op" ] &&
+		continue
+	
+	printf '\033[K\033[0m' >&2
+	printf '%s\n' "$p"
+	op="$p"
+done

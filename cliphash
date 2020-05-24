@@ -1,0 +1,22 @@
+#!/bin/bash
+set -e
+
+# watch clipboard for filepaths; hash them
+cliplist |
+while IFS= read -r p
+do
+	printf '\033[35m'
+	h="$(sha1sum -- "$p" |
+		cut -c-40 |
+		grep -E '^[0-9a-f]{40}$'
+	)" ||
+		continue
+	
+	#[ "$h" = "$oh" ] && c='32m' || c='1;37m'
+	[ "$h" = "$oh" ] || echo
+	
+	printf "\033[0;36m%s\033[0m %s  %s\n" \
+		"$(date +%Y-%m%d-%H%M%S)" "$h" "$p"
+	
+	oh="$h"
+done
