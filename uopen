@@ -3,13 +3,25 @@ set -e
 
 # uopen - decrypts and mounts one or more luks partitions,
 # ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
-# -- run without arguments for interactive mode
+# -- provide a blockdev to disable interactive mode
+# -- provide "ro" for readonly
 
-[ -z "$1" ] || {
-	onedev="/dev/${1##*/}"
+onedev=
+readonly=
+
+while [ ! -z "$1" ]
+do
+	v="$1"
+	shift
+
+	[ "$v" = "ro" ] &&
+		readonly=1 &&
+		continue
+
+	onedev="/dev/${v##*/}"
 	[ -e "$onedev" ] ||
 		onedev=
-}
+done
 
 f=$(mktemp -p /dev/shm/ uopen.XXXXX)
 cln() {
@@ -71,15 +83,21 @@ do
 	echo
 	wc -c < $f
 
+	acrypt=
+	amount=
+	[ $readonly ] &&
+		acrypt=-r &&
+		amount="-o ro"
+
 	(
 		ov="${dev}_ov"
 
-		cryptsetup open -d $f /dev/"$dev" "$ov" || {
+		cryptsetup open $acrypt -d $f /dev/"$dev" "$ov" || {
 			echo "failed to decrypt $dev ($size)"
 			exit 1
 		}
 		mkdir -p /mnt/"$ov"
-		mount /dev/mapper/"$ov" /mnt/"$ov"
+		mount /dev/mapper/"$ov" /mnt/"$ov" $amount
 	) &
 
 done < <(

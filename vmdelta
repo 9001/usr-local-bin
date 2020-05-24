@@ -1,0 +1,16 @@
+#!/bin/bash
+set -e
+
+xzhash() { mkdir -p hash; [ $(stat -c%Y -- "$1") -eq $(stat -c%Y -- "hash/$1" 2>/dev/null || echo 0) ] && return; printf 'hashing %s\n' "$1"; pixz -dtk < "$1" | sha512sum | cut -c-128 > "hash/$1"; touch -r "$1" -- "hash/$1"; }
+
+mkpatch() { f1="$2"; f2="$3"; fp="$f1.XD3$1"; printf '%s » %s = %s\n' "$f1" "$f2" "$fp"; xdelta3 -eRs "$f1" < "$f2" | pixz -7tk > "$fp"; touch -r "$f2" "$fp"; xzhash "$f1"; xzhash "$f2"; }
+
+[ "$#" -eq 2 ] || {
+	echo need arg1: most recent version
+	echo need arg2: original file
+	echo example: 'centos.ext4.trim.xfce4{.cfg,}'
+	exit 1
+}
+
+mkpatch -1 "$@"
+

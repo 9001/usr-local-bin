@@ -1,0 +1,2 @@
+#!/bin/bash
+grep --color=always "$@" | sed -r 's/1;31m/1;37;41m/g' | less -R
