@@ -37,7 +37,7 @@ scan() {
 			
 			find -type f -exec md5sum '{}' \+ |
 			{
-				which pv >/dev/null 2>/dev/null && pv | cat
+				which pv >/dev/null 2>/dev/null && pv || cat
 			} |
 			sed -r 's/(\\?.{32})(.*)/\2\1/' |
 			sort |
