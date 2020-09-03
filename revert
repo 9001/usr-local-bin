@@ -1,12 +1,12 @@
 #!/usr/bin/env python2
-from __future__ import print_function
+from __future__ import print_function, unicode_literals
 import struct
 import time
 import sys
 import os
 
 """revert.py: File Revert Utility"""
-__version__   = "1.3"
+__version__   = "1.4"
 __author__    = "ed <revert@ocv.me>"
 __credits__   = ["stackoverflow.com"]
 __license__   = "MIT"
@@ -59,6 +59,40 @@ else:
 	stdin = sys.stdin
 
 
+# TODO
+def get_disk_size(f):
+	buf = bytearray(8)
+	if sys.platform == 'darwin':  
+		# <sys/disk.h>
+		DKIOCGETBLOCKSIZE = 0x40046418
+		DKIOCGETBLOCKCOUNT = 0x40086419
+
+		fcntl.ioctl(f.fileno(), DKIOCGETBLOCKSIZE, buf, True)
+		block_size = struct.unpack('I', buf[:4])[0]
+		fcntl.ioctl(f.fileno(), DKIOCGETBLOCKCOUNT, buf, True)
+		block_count = struct.unpack('Q', buf)[0]
+
+		return block_size * block_count
+	elif sys.platform.startswith('freebsd'):
+		# <sys/disk.h>
+		DIOCGMEDIASIZE = 0x40086481
+		
+		fcntl.ioctl(f.fileno(), DIOCGMEDIASIZE, buf, True)
+		return struct.unpack('Q', buf)[0]
+	else:
+		p = f.tell()
+
+		f.seek(0, os.SEEK_END)
+		size = f.tell()
+		f.seek(p, os.SEEK_SET)
+
+		return size
+
+# f = open('/dev/rdisk0', 'rb')
+# print(get_disk_size(f))
+
+
+
 # bash version:
 # writes=8; blksize=$((4096*1024)); value=0; while [[ $blksize -gt 1 ]]; do value=$((value+1)); dir="$(pwd)"; cd /dev/shm; printf "\x$(printf '%02x' $value)" > ddt1; for n in {1..7}; do cat ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 ddt1 > ddt2; mv ddt2 ddt1; done; t0=$(date +%s%N); dd if=ddt1 bs=$blksize count=$writes of="$dir/ddtmp" 2>/dev/null >/dev/null ; t1=$(date +%s%N); printf 'ms %d blksize %d writes %d\n' $(( (t1-t0)/1000000 )) $blksize $writes; blksize=$((blksize/2)); writes=$((writes*2)); done
 if sys.argv[1].lower() == 'blksize':
@@ -96,6 +130,10 @@ if sys.argv[1].lower() == 'blksize':
 			writes *= 2
 	exit(0)
 
+# aim for 4 MiB reads, unless BUFSIZE is bigger
+nsubs = max(1, int(1024*1024*4. / BUFSIZE))
+#p('using nsubs {0} = {1:.2} MiB'.format(nsubs, nsubs*BUFSIZE/(1024*1024.)))
+
 f = open(sys.argv[1], 'r+b', BUFSIZE)
 f.seek(0, os.SEEK_END)
 len_file = f.tell()
@@ -123,7 +161,6 @@ print_interval = 1024*1024*8
 
 t0 = time.time()
 
-nsubs = 64
 while nsubs > 0:
 	f.seek(len_orig)
 	orig16 = stdin.read(BUFSIZE*nsubs)

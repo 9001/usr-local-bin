@@ -88,35 +88,53 @@ ndevs=$(printf '%s\n' /dev/${nbd_dev}* | wc -l)
 	done
 }
 
-echo "done, now idle"
-echo "press ENTER to unmount, or CTRL-C to handle cleanup yourself"
-read -u1 -r
-
-for mp in "$tag.nbd"*
-do
-	echo
-	echo "unmounting $mp"
-	
-	while true
+cleanup() {
+	for mp in "$tag.nbd"*
 	do
-		mount | grep -F " on $mp " &&
-			umount "$mp" || true
-		
-		mount | grep -qF " on $mp " || {
-			rmdir "$mp" 2>/dev/null || true
-			break
-		}
-		
-		printf '\n\033[1;31mfailed to unmount %s\n' "$mp"
-		printf '\\- the following files (if any) are still open:\033[0m\n'
-		lsof "$mp"
 		echo
-		echo 'press ENTER to retry'
-		read -u1 -r
+		echo "unmounting $mp"
+		
+		while true
+		do
+			mount | grep -F " on $mp " &&
+				umount "$mp" || true
+			
+			mount | grep -qF " on $mp " || {
+				rmdir "$mp" 2>/dev/null || true
+				break
+			}
+			
+			printf '\n\033[1;31mfailed to unmount %s\n' "$mp"
+			printf '\\- the following files (if any) are still open:\033[0m\n'
+			lsof "$mp" || true
+			echo
+			echo 'press ENTER to retry'
+			read -u1 -r
+		done
 	done
-done
+	
+	echo
+	qemu-nbd -d /dev/$nbd_dev
+	rm -f /mnt/$nbd_dev.img
+	echo done
+}
 
-echo
-qemu-nbd -d /dev/$nbd_dev
-rm -f /mnt/$nbd_dev.img
-echo done
+trap cleanup EXIT
+
+echo "done, now idle"
+echo "press N if you do NOT want automatic unmount on CTRL-C or exit"
+while true
+do
+	read -u1 -n1 -r r
+	echo
+	
+	[ "$r" = n ] || [ "$r" = N ] && {
+		echo "auto-unmount disabled"
+		trap - EXIT
+	}
+	
+	[ "$r" = y ] || [ "$r" = Y ] && {
+		echo "auto-unmount enabled"
+		trap cleanup EXIT
+	}
+done
