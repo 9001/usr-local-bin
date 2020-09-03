@@ -38,10 +38,13 @@ git checkout -t origin/master
 | **`uopen`**     | decrypts and mounts one or more luks partitions,
 | **`vmdm`**      | mount a virtual-machine disk image (virtualbox, qemu, ...)
 | **`xcode-dir`** | transcode all multimedia files in a folder
+| **`xdi`**       | rough idea for version-control of binary files
 
 # overview (the rest)
 | Command | Description
 | --- | ---
+| **`cliplist`**  | monitor clipboard, list unique values
+| **`cliphash`**  | monitor clipboard for filepaths and hash them
 | **`cpr`**       | resume copying a file or blockdevice to a file
 | **`famon`**     | monitor access to small files from a process
 | **`ileave`**    | display two files interleaved
@@ -52,4 +55,6 @@ git checkout -t origin/master
 | **`rimgcmp`**   | ranger image compare
 | **`sbs`**       | show two files side by side
 | **`smartmon`**  | periodically collect SMART data from disks to logfile
+| **`ssconv`**    | convert screenshots to jpg as they appear
+| **`vmdelta`**   | first attempt at `xdi`, somehow worse
 | undup-sc...     | find duplicate split-rar folders
