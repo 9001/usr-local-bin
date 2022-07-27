@@ -34,6 +34,7 @@ git checkout -t origin/master
 | **`newcrypt`**  | luks-encrypt a device + create btrfs filesystem on it
 | **`revert`**    | revert changes in a file based on a(?: compressed)? backup
 | **`rfl`**       | recursive file listing with symlink-target, modes, size, owner/group, lastmod
+| **`sq3.py`**    | jank python reimplementation of `sqlite3(1)`
 | **`uclose`**    | interactively unmounts and closes one or more luks partitions
 | **`uopen`**     | decrypts and mounts one or more luks partitions,
 | **`vmdm`**      | mount a virtual-machine disk image (virtualbox, qemu, ...)
