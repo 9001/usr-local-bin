@@ -18,6 +18,7 @@ git checkout -t origin/master
 | **`anime`**     | verify crc32 in filename
 | **`bindiff`**   | compare two files, print hexdump of differences
 | **`cdiff`**     | colored diff
+| **`csnk`**      | export cookies from browser
 | **`dircmp`**    | compare current and another directory, listing unique and modified files
 | **`dshred`**    | writes predictable yet random-looking data to a disk
 | **`dvdimport`** | copy stuff off optical media (prefer miso if the disk is bad)

@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+
+"""
+cookiesnook - export cookies from browser
+2022, ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+"""
+
+import os
+import sys
+import tempfile
+
+try:
+    from yt_dlp import cookies as Cookies
+except:
+    t = "\033[1;31m\n\n  need yt_dlp; please run the following:\n    {} -m pip install --user -U yt_dlp\n\033[0m"
+    raise Exception(t.format(sys.executable))
+
+
+def main():
+    try:
+        browser, fn = sys.argv[1:]
+    except:
+        t = ",".join(list(sorted(Cookies.SUPPORTED_BROWSERS)))
+        print("need arg 1: browser [{}]".format(t))
+        print("need arg 2: output filename or -")
+        return 1
+
+    cj = Cookies.extract_cookies_from_browser(browser)
+    if fn != "-":
+        cj.save(fn)
+    else:
+        with tempfile.TemporaryDirectory() as td:
+            fp = os.path.join(td, "a")
+            cj.save(fp)
+            with open(fp, "rb") as f:
+                sys.stdout.buffer.write(f.read() + b"\n")
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)
