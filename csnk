@@ -6,6 +6,7 @@ cookiesnook - export cookies from browser
 """
 
 import os
+import re
 import sys
 import tempfile
 
@@ -17,23 +18,42 @@ except:
 
 
 def main():
+    ptn = None
     try:
-        browser, fn = sys.argv[1:]
+        browser, fn = sys.argv[1:3]
     except:
-        t = ",".join(list(sorted(Cookies.SUPPORTED_BROWSERS)))
-        print("need arg 1: browser [{}]".format(t))
-        print("need arg 2: output filename or -")
+        blt = ",".join(list(sorted(Cookies.SUPPORTED_BROWSERS)))
+        t = """
+need arg 1: browser [{}]
+need arg 2: output filename or -
+optional arg 3: regex of domains to include
+
+example:
+  csnk firefox - ^.youtube.com
+"""
+        print(t.format(blt))
         return 1
 
+    if len(sys.argv) > 3:
+        ptn = re.compile("^$|^#|" + sys.argv[3])
+
     cj = Cookies.extract_cookies_from_browser(browser)
-    if fn != "-":
-        cj.save(fn)
-    else:
-        with tempfile.TemporaryDirectory() as td:
-            fp = os.path.join(td, "a")
-            cj.save(fp)
-            with open(fp, "rb") as f:
-                sys.stdout.buffer.write(f.read() + b"\n")
+    with tempfile.TemporaryDirectory() as td:
+        fp = os.path.join(td, "a")
+        cj.save(fp)
+        with open(fp, "rb") as f:
+            txt = f.read()
+
+        if ptn:
+            txt = txt.decode("utf-8", "ignore").split("\n")
+            txt = [x for x in txt if ptn.search(x)]
+            txt = "\n".join(txt).encode("ascii")
+
+        if fn == "-":
+            sys.stdout.buffer.write(txt + b"\n")
+        else:
+            with open(fn, "wb") as f:
+                f.write(txt)
 
 
 if __name__ == "__main__":
