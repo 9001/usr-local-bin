@@ -38,12 +38,12 @@ try:
             readline.append_history_file(newhist, histfile)
         except:
             readline.write_history_file(histfile)
-        
+
         try:
             os.system("stty sane")
         except:
             pass
-        
+
         print()
 
     atexit.register(savehist)
@@ -72,7 +72,7 @@ class C(object):
                 return
 
             self.cur.execute(sql)
-            if lsql.startswith("select"):
+            if lsql[:6] in ["select", "pragma"]:
                 self.dump()
 
             return True
@@ -121,7 +121,7 @@ class C(object):
     def dump_rows(self, names, rows):
         x = [names] + rows
         cws = [
-            len(max([str(row[col]) for row in x], key=len))
+            len(max([str(row[col]) for row in x], key=len))  #
             for col in range(len(names))
         ]
 
@@ -168,12 +168,12 @@ class C(object):
         fmt = sep
         for w in cws:
             fmt += " {{:{}}} {}".format(w, sep)
-        
+
         if self.of == "column":
             fmt = fmt[1:-1] + "\n"
         else:
             fmt += "\n"
-        
+
         for row in rows:
             print(fmt.format(*["(/)" if x is None else x for x in row]), end="")
 
@@ -185,8 +185,9 @@ def main():
     ST = "store_true"
     SC = "store_const"
 
+    # fmt: off
     ap = argparse.ArgumentParser()
-    ap.add_argument("fn", metavar="FILENAME", default=":memory:")
+    ap.add_argument("fn", metavar="FILENAME", nargs="?", default=":memory:")
     ap.add_argument("sql", metavar="SQL", nargs="*", default=None)
 
     se = ap.add_argument_group("db config")
@@ -201,17 +202,30 @@ def main():
     se.add_argument("-list", const="list", dest="of", action=SC)
     se.add_argument("-markdown", const="markdown", dest="of", action=SC, help="(default)")
 
-    se = ap.add_argument_group("format modifiers: -list")
-    se.add_argument("-separator", help="for -list", default=" | ")
+    se = ap.add_argument_group("format modifiers for -list")
+    se.add_argument("-separator", default=" | ")
 
     se = ap.add_argument_group("info")
-    se.add_argument("-version", action=ST)
+    se.add_argument("-V", "-version", action=ST)
 
+    # fmt: on
     ar = ap.parse_args()
 
-    if ar.version:
-        t = "sqlite {}\n{} {}\n".format(
+    if ar.V:
+        try:
+            cur = sqlite3.connect(":memory:")
+            try:
+                vs = cur.execute("select * from pragma_compile_options").fetchall()
+            except:
+                vs = cur.execute("pragma compile_options").fetchall()
+
+            ms = next(x[0] for x in vs if x[0].startswith("THREADSAFE="))
+        except:
+            ms = "THREADSAFE=?"
+
+        t = "sqlite {} {}\n{} {}\n".format(
             sqlite3.sqlite_version,
+            ms,
             platform.python_implementation(),
             ".".join([str(x) for x in sys.version_info]).split(".final.")[0],
         )
