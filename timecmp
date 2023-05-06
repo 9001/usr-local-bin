@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+from __future__ import print_function, unicode_literals
+
+
+"""timecmp: compare system time"""
+__version__ = "2023-05-06"
+__author__ = "ed <timecmp@ocv.me>"
+__credits__ = ["stackoverflow.com"]
+__license__ = "MIT"
+__copyright__ = 2023
+
+
+import os
+import sys
+import time
+import errno
+import ctypes
+
+try:
+    import socket
+    import threading
+except:
+    pass
+
+
+## directly between pipes (pointless, but a good example):
+# python3 timecmp.py wp 1 | python3 timecmp.py rp
+
+## more exciting over an ssh pipe between machines:
+# ssh 10.1.2.9 'python timecmp.py wp 1' | python3 timecmp.py rp
+
+## or using the native tcp transport;
+# run a server on some box:  python2 timecmp.py wn 1
+# and connect from another:  python3 timecmp.py rn 10.1.2.9
+
+## supports python 2.6 :^)
+
+
+PORT = 8463
+PY2 = sys.version_info < (3,)
+WIN = sys.platform in ["win32", "msys", "cygwin"]
+
+
+try:
+    _ = TimeoutError
+except:
+    TimeoutError = MemoryError
+
+
+class timespec(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_long), ("tv_nsec", ctypes.c_long)]
+
+
+try:
+    # all the magic is from /usr/include/linux/time.h
+    librt = ctypes.CDLL("librt.so.1", use_errno=True)
+    clock_gettime = librt.clock_gettime
+    clock_gettime.argtypes = [ctypes.c_int, ctypes.POINTER(timespec)]
+
+    def rt_gettime():
+        t = timespec()
+        # 4: CLOCK_MONOTONIC_RAW
+        if clock_gettime(4, ctypes.pointer(t)) != 0:
+            errno_ = ctypes.get_errno()
+            raise OSError(errno_, os.strerror(errno_))
+
+        return t.tv_sec + t.tv_nsec * 1e-9
+
+    def get_uptime():
+        with open("/proc/uptime", "r") as f:
+            return float(f.read().split(" ")[0])
+
+except:
+
+    def rt_gettime():
+        # can of worms: https://bugs.python.org/issue44328
+        return time.monotonic()
+
+    get_uptime = rt_gettime
+
+
+def gentimes():
+    fmt = "%.2f %.4f %.4f | %.2f %.3f %.3f | um=%+.2f uw=%+.2f mw=%+.4f"
+    # first 3 fields: [U]ptime, [M]onotonic, [W]allclock
+    #  next 3 fields: total runtime according to u,m,w  (should be identical)
+    #  next 3 fields: total drift between u/m, u/w, m/w
+
+    ival = float(sys.argv[2]) if len(sys.argv) > 2 else 60
+    m0 = rt_gettime()
+    u0 = get_uptime()
+    w0 = time.time()
+    while True:
+        m = rt_gettime()
+        u = get_uptime()
+        w = time.time()
+        tm = m - m0
+        tu = u - u0
+        tw = w - w0
+        yield fmt % (u, m, w, tu, tm, tw, tu - tm, tu - tw, tm - tw)
+
+        # sleep until monotonic % interval ~= 0
+        tgt = (int(m / ival) + 1) * ival
+        time.sleep(tgt - m)
+
+
+def writepipe():
+    if PY2:
+        for t in gentimes():
+            print("%s\n" % (t,), end="")
+            sys.stdout.flush()
+    else:
+        for t in gentimes():
+            print("%s\n" % (t,), end="", flush=True)
+
+
+def writenet():
+    ival = float(sys.argv[2]) if len(sys.argv) > 2 else 60
+    port = float(sys.argv[3]) if len(sys.argv) > 3 else PORT
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if not WIN:
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    srv.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    srv.settimeout(ival * 2.5)
+    srv.bind(("0.0.0.0", port))
+    srv.listen(4)
+    print("listening on port", port)
+    while True:
+        try:
+            cli, addr = srv.accept()
+            print("cli", addr)
+            t = threading.Thread(target=writenetc, args=(cli, addr))
+            t.daemon = True
+            t.start()
+        except TimeoutError:
+            pass
+        except Exception as ex:
+            if str(ex) == "timed out":
+                continue  # py27
+            print("ex:", ex)
+
+
+def writenetc(cli, addr):
+    for t in gentimes():
+        try:
+            cli.sendall(t.encode("utf-8") + b"\n")
+        except:
+            print("bye", addr)
+            cli.close()
+            return
+
+
+if PY2:
+
+    def readpipe():
+        while True:
+            ln = sys.stdin.readline()
+            if not ln:
+                break
+            yield ln
+
+else:
+
+    def readpipe():
+        for ln in sys.stdin:
+            yield ln
+
+
+def readnet():
+    ip = sys.argv[2]
+    port = float(sys.argv[3]) if len(sys.argv) > 3 else PORT
+
+    sck = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sck.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    sck.connect((ip, port))
+    buf = b""
+    while True:
+        b = sck.recv(1024)
+        if not b:
+            print("bye")
+            return
+        buf += b
+        if b"\n" not in buf:
+            continue
+        lns = buf.split(b"\n")
+        for ln in lns[:-1]:
+            yield ln.decode("utf-8")
+        buf = lns[-1]
+
+
+def fcmp(src, sync):
+    fmt = "d %+.2f %+.4f %+.4f | u %.2f %.2f | m %.4f %.4f | w %.4f %.4f"
+    # u = uptime
+    # m = monotonic
+    # w = wallclock
+    # first 3 cols = total drift between remote/local u,m,w
+    # remaining fields = pairs of total (local,remote) u,m,w
+
+    if sync:
+        # skip burst of initial items from pipe
+        prev = rt_gettime()
+        while True:
+            txt = next(src)
+            now = rt_gettime()
+            if now - prev > 0.03:
+                break
+            prev = now
+            print(".", end="")
+        print()
+    else:
+        # network/tcp; just go
+        txt = next(src)
+
+    ru0, rm0, rw0 = [float(x) for x in txt.split(" ")[:3]]
+    lm0 = rt_gettime()
+    lu0 = get_uptime()
+    lw0 = time.time()
+    for txt in src:
+        ru, rm, rw = [float(x) for x in txt.split(" ")[:3]]
+        lm = rt_gettime()
+        lu = get_uptime()
+        lw = time.time()
+        tlu = lu - lu0
+        tlm = lm - lm0
+        tlw = lw - lw0
+        tru = ru - ru0
+        trm = rm - rm0
+        trw = rw - rw0
+        print(fmt % (tlu - tru, tlm - trm, tlw - trw, tlu, tru, tlm, trm, tlw, trw))
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "wp":
+        return writepipe()
+    elif cmd == "wn":
+        return writenet()
+    elif cmd == "rp":
+        return fcmp(readpipe(), True)
+    elif cmd == "rn":
+        return fcmp(readnet(), False)
+    else:
+        print("need arg 1: wp | wn | rp | rn")
+        print()
+        print("wp (writepipe) args: [interval]")
+        print("wn (writenet) args: [interval [port]]")
+        print("rp (readpipe) args: -n/a-")
+        print("rn (readnet) args: ip [port]")
+        print()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
