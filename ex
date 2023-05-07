@@ -8,6 +8,7 @@ set -e
 # optional args after archive name:
 #   r = remove archive after unpack
 #   n = no trust name inside archive (always subfolder based on archive filename)
+#   z = use unzip instead of 7z for zip files
 # suggested usage:
 #   for f in *; do case "$f" in *.rar | *.zip | *.7z ) ex ./"$f" r || break ;; esac; done
 
@@ -160,9 +161,14 @@ rv=300
 
 
 # use 7z if .7z or .zip
-[ "${arc##*.}" = "7z" ] ||
+p=
+[ "${arc##*.}" = "7z" ] && p=(7z x)
 [ "${arc##*.}" = "zip" ] && {
-	$ub 7z x "$arc" 2>&1 | $ub tee "$log.arcex-$ts-ex"
+	printf '%s\n' "$*" | grep -qE '(^| )z( |$)' &&
+		p=(unzip) || p=(7z x)
+}
+[ $p ] && {
+	$ub ${p[@]} "$arc" 2>&1 | $ub tee "$log.arcex-$ts-ex"
 	rv=${PIPESTATUS[0]}
 }
 

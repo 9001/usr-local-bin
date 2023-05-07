@@ -35,7 +35,7 @@ scan() {
 		(
 			cd -- "$x"
 			
-			find -type f -exec md5sum '{}' \+ |
+			find -L -type f -exec md5sum '{}' \+ |
 			{
 				which pv >/dev/null 2>/dev/null && pv || cat
 			} |
