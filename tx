@@ -1,0 +1,4 @@
+#!/bin/bash
+set -e
+while true; do nice ffmpeg -nostdin -hide_banner -flush_packets 1 -fflags +nobuffer -flags +low_delay -flags2 fast -f x11grab -framerate 60 -s $(xrandr | awk '/ connected /{sub(/\+.*/,"");print$NF}') -i :0.0+0,0 -flags2 fast -pix_fmt yuv444p -vcodec libx264 -tune zerolatency -preset ultrafast -g 30 -crf 32 -coder 0 -bf 0 -flags -loop -wpredp 0 -listen 1 -f mpegts -flags2 fast tcp://0.0.0.0:3737/; sleep 0.2; done
+

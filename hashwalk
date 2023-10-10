@@ -208,20 +208,24 @@ def walker(top):
 		try:
 			sr = os.lstat(path)
 			mode = sr.st_mode
+			mtime = sr.st_mtime
 		except:
 			continue
 		
 		if stat.S_ISLNK(mode):
-			continue
+			sr = os.stat(path)
+			mode = sr.st_mode
+			if not stat.S_ISREG(mode):
+				continue
 		
-		elif stat.S_ISDIR(mode):
+		if stat.S_ISDIR(mode):
 			if not excl_mask.search(path):
 				# py2 gets mad if we mention «yield from» at all
 				for v in walker(path):
 					yield v
 		
 		elif stat.S_ISREG(mode):
-			yield [ sr.st_mode, sr.st_mtime, sr.st_size, path ]
+			yield [ sr.st_mode, mtime, sr.st_size, path ]
 		
 		else:
 			ueprint(u'\033[1;31mSkipping {0}\033[0m'.format(path.decode('utf-8', 'ignore')))

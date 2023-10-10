@@ -3,7 +3,7 @@ from __future__ import print_function, unicode_literals
 
 
 """timecmp: compare system time"""
-__version__ = "2023-05-06"
+__version__ = "2023-10-10"
 __author__ = "ed <timecmp@ocv.me>"
 __credits__ = ["stackoverflow.com"]
 __license__ = "MIT"
@@ -24,14 +24,18 @@ except:
 
 
 ## directly between pipes (pointless, but a good example):
-# python3 timecmp.py wp 1 | python3 timecmp.py rp
+# python3 timecmp wp 1 | python3 timecmp rp
 
 ## more exciting over an ssh pipe between machines:
-# ssh 10.1.2.9 'python timecmp.py wp 1' | python3 timecmp.py rp
+# ssh 10.1.2.9 'python - wp 1' <timecmp | python3 timecmp rp cool-banner
 
-## or using the native tcp transport;
-# run a server on some box:  python2 timecmp.py wn 1
-# and connect from another:  python3 timecmp.py rn 10.1.2.9
+## or, if ssh is not an option, use the native tcp transport:
+# run a server on some box:  python2 timecmp wn 1
+# and connect from another:  python3 timecmp rn 10.1.2.9
+
+## or, if a firewall makes that impossible, invert it:
+# listen on receiver:  socat tcp4-l:8463,reuseaddr - | ./timecmp rp
+# connect from sender: ./timecmp wp 1 >/dev/tcp/10.1.2.34/8463
 
 ## supports python 2.6 :^)
 
@@ -115,7 +119,7 @@ def writepipe():
 
 def writenet():
     ival = float(sys.argv[2]) if len(sys.argv) > 2 else 60
-    port = float(sys.argv[3]) if len(sys.argv) > 3 else PORT
+    port = int(sys.argv[3]) if len(sys.argv) > 3 else PORT
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     if not WIN:
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -168,7 +172,7 @@ else:
 
 def readnet():
     ip = sys.argv[2]
-    port = float(sys.argv[3]) if len(sys.argv) > 3 else PORT
+    port = int(sys.argv[3]) if len(sys.argv) > 3 else PORT
 
     sck = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sck.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -189,11 +193,17 @@ def readnet():
 
 
 def fcmp(src, sync):
-    fmt = "d %+.2f %+.4f %+.4f | u %.2f %.2f | m %.4f %.4f | w %.4f %.4f"
+    try:
+        fmt = "\033[s\033[2r\033[H\033[0;1;37;44m%s\033[K\033[u\033[A\n" % (sys.argv[2],)
+    except:
+        fmt = ""
+
+    fmt += "%+.2f %+.4f %+.4f \033[36m%% %+.2f %+.2f %+.2f \033[0mu %.2f %.2f \033[36mm %.4f %.4f \033[0mw %.4f %.4f"
     # u = uptime
     # m = monotonic
     # w = wallclock
     # first 3 cols = total drift between remote/local u,m,w
+    # next 3 cols = total drift % between remote/local u,m,w
     # remaining fields = pairs of total (local,remote) u,m,w
 
     if sync:
@@ -226,7 +236,20 @@ def fcmp(src, sync):
         tru = ru - ru0
         trm = rm - rm0
         trw = rw - rw0
-        print(fmt % (tlu - tru, tlm - trm, tlw - trw, tlu, tru, tlm, trm, tlw, trw))
+
+        print(fmt % (
+            tlu - tru,
+            tlm - trm,
+            tlw - trw,
+
+            100-100*(tlu/tru),
+            100-100*(tlm/trm),
+            100-100*(tlw/trw),
+
+            tlu, tru,
+            tlm, trm,
+            tlw, trw,
+        ))
 
 
 def main():
@@ -244,7 +267,7 @@ def main():
         print()
         print("wp (writepipe) args: [interval]")
         print("wn (writenet) args: [interval [port]]")
-        print("rp (readpipe) args: -n/a-")
+        print("rp (readpipe) args: [banner]")
         print("rn (readnet) args: ip [port]")
         print()
         sys.exit(1)
