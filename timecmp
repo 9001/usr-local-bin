@@ -3,7 +3,7 @@ from __future__ import print_function, unicode_literals
 
 
 """timecmp: compare system time"""
-__version__ = "2023-10-10"
+__version__ = "2023-10-25"
 __author__ = "ed <timecmp@ocv.me>"
 __credits__ = ["stackoverflow.com"]
 __license__ = "MIT"
@@ -221,10 +221,12 @@ def fcmp(src, sync):
         # network/tcp; just go
         txt = next(src)
 
+    n = 0
     ru0, rm0, rw0 = [float(x) for x in txt.split(" ")[:3]]
     lm0 = rt_gettime()
     lu0 = get_uptime()
     lw0 = time.time()
+    print("\033[90m#-   L %.4f %.4f %.4f   R %.4f %.4f %.4f \033[0m" % (lu0, lm0, lw0, ru0, rm0, rw0))
     for txt in src:
         ru, rm, rw = [float(x) for x in txt.split(" ")[:3]]
         lm = rt_gettime()
@@ -236,15 +238,20 @@ def fcmp(src, sync):
         tru = ru - ru0
         trm = rm - rm0
         trw = rw - rw0
+        tdu = tlu - tru
+        tdm = tlm - trm
+        tdw = tlw - trw
+
+        n += 1
+        if n % 30 == 1:
+            print("\033[90m#%d   L %.4f %.4f %.4f   R %.4f %.4f %.4f \033[0m" % (n, lu, lm, lw, ru, rm, rw))
 
         print(fmt % (
-            tlu - tru,
-            tlm - trm,
-            tlw - trw,
+            tdu, tdm, tdw,
 
-            100-100*(tlu/tru),
-            100-100*(tlm/trm),
-            100-100*(tlw/trw),
+            100*(tdu/tlu),
+            100*(tdm/tlm),
+            100*(tdw/tlw),
 
             tlu, tru,
             tlm, trm,
