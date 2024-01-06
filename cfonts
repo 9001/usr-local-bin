@@ -1,0 +1,36 @@
+#!/bin/bash
+set -e
+
+# cfonts - console fonts browser
+# ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+
+# step through all available console fonts and find one you like;
+# later you can manually set the font using "setfont thefont.psf"
+
+cd /usr/lib/kbd/consolefonts ||
+cd /usr/share/kbd/consolefonts ||
+cd /usr/share/consolefonts
+
+fonts() {
+	find -iname '*.psf*'
+}
+
+n=0
+nt=$(fonts | wc -l)
+
+while true; do
+	f=$(fonts | awk NR==$n)
+	if setfont "$f"; then
+		ls  # some noise to judge it by
+        showconsolefont && showconsolefont -i | tr '\n' ' '
+	else
+		echo "ERROR font failed to load"
+	fi
+	printf '%d/%d %s; ' $n $nt "$f"
+	read -u1 -n1 -rp 'press j/k ' r
+    echo
+	if [ "$r" = j ]; then s=1;
+	elif [ "$r" = k ]; then s=-1;
+	else break; fi
+	n=$((n+s))
+done
