@@ -3,7 +3,7 @@ from __future__ import print_function, unicode_literals
 
 
 """timecmp: compare system time"""
-__version__ = "2023-10-25"
+__version__ = "2024-03-14"
 __author__ = "ed <timecmp@ocv.me>"
 __credits__ = ["stackoverflow.com"]
 __license__ = "MIT"
@@ -13,7 +13,6 @@ __copyright__ = 2023
 import os
 import sys
 import time
-import errno
 import ctypes
 
 try:
@@ -44,11 +43,18 @@ PORT = 8463
 PY2 = sys.version_info < (3,)
 WIN = sys.platform in ["win32", "msys", "cygwin"]
 
+mutex = threading.Lock()
+
 
 try:
     _ = TimeoutError
 except:
     TimeoutError = MemoryError
+
+
+def mprint(*a, **ka):
+    with mutex:
+        print(*a, **ka)
 
 
 class timespec(ctypes.Structure):
@@ -74,11 +80,19 @@ try:
         with open("/proc/uptime", "r") as f:
             return float(f.read().split(" ")[0])
 
+    print("using unix-uptime (good)")
+
 except:
 
-    def rt_gettime():
-        # can of worms: https://bugs.python.org/issue44328
-        return time.monotonic()
+    if hasattr(time, "monotonic"):
+        print("using time.monotonic (okay)")
+        def rt_gettime():
+            # can of worms: https://bugs.python.org/issue44328
+            return time.monotonic()
+    else:
+        print("WARNING: pretending time.time is monotonic (use python3)")
+        def rt_gettime():
+            return time.time()
 
     get_uptime = rt_gettime
 
@@ -170,9 +184,30 @@ else:
             yield ln
 
 
-def readnet():
-    ip = sys.argv[2]
-    port = int(sys.argv[3]) if len(sys.argv) > 3 else PORT
+def get_remotes():
+    ret = []
+    ip = ""
+    for v in sys.argv[2:]:
+        if "." in v:
+            if ip:
+                ret.append(ip)
+            ip = v
+        elif ":" not in ip:
+            ip += ":" + v
+        else:
+            raise Exception("invalid arg %s after %s" % (v, ip))
+    if ip:
+        ret.append(ip)
+    return ret
+
+
+def readnet(target):
+    try:
+        ip, port = target.split(":")
+    except:
+        ip = target
+        port = PORT
+    port = int(port)
 
     sck = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sck.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -181,7 +216,7 @@ def readnet():
     while True:
         b = sck.recv(1024)
         if not b:
-            print("bye")
+            mprint("bye")
             return
         buf += b
         if b"\n" not in buf:
@@ -192,11 +227,14 @@ def readnet():
         buf = lns[-1]
 
 
-def fcmp(src, sync):
+def fcmp(src, sync, y=0, ip=""):
     try:
         fmt = "\033[s\033[2r\033[H\033[0;1;37;44m%s\033[K\033[u\033[A\n" % (sys.argv[2],)
     except:
         fmt = ""
+
+    if y:
+        fmt = "\033[%dH" % (y,)
 
     fmt += "%+.2f %+.4f %+.4f \033[36m%% %+.2f %+.2f %+.2f \033[0mu %.2f %.2f \033[36mm %.4f %.4f \033[0mw %.4f %.4f"
     # u = uptime
@@ -205,6 +243,9 @@ def fcmp(src, sync):
     # first 3 cols = total drift between remote/local u,m,w
     # next 3 cols = total drift % between remote/local u,m,w
     # remaining fields = pairs of total (local,remote) u,m,w
+
+    if y:
+        fmt += "  " + ip + "\033[99H\033[A"
 
     if sync:
         # skip burst of initial items from pipe
@@ -243,10 +284,10 @@ def fcmp(src, sync):
         tdw = tlw - trw
 
         n += 1
-        if n % 30 == 1:
+        if n % 30 == 1 and not y:
             print("\033[90m#%d   L %.4f %.4f %.4f   R %.4f %.4f %.4f \033[0m" % (n, lu, lm, lw, ru, rm, rw))
 
-        print(fmt % (
+        mprint(fmt % (
             tdu, tdm, tdw,
 
             100*(tdu/tlu),
@@ -259,7 +300,14 @@ def fcmp(src, sync):
         ))
 
 
+def multiread(n, ip):
+    fcmp(readnet(ip), False, n + 1, ip)
+
+
 def main():
+    if WIN:
+        os.system("rem")
+
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "wp":
         return writepipe()
@@ -268,7 +316,19 @@ def main():
     elif cmd == "rp":
         return fcmp(readpipe(), True)
     elif cmd == "rn":
-        return fcmp(readnet(), False)
+        ips = get_remotes()
+        if len(ips) == 1:
+            return fcmp(readnet(ips[0]), False)
+        else:
+            print("\033[H\033[J", end="")
+            thrs = []
+            for n, ip in enumerate(ips):
+                t = threading.Thread(target=multiread, args=(n,ip))
+                t.daemon = True
+                t.start()
+                thrs.append(t)
+            for t in thrs:
+                t.join()
     else:
         print("need arg 1: wp | wn | rp | rn")
         print()
@@ -276,6 +336,7 @@ def main():
         print("wn (writenet) args: [interval [port]]")
         print("rp (readpipe) args: [banner]")
         print("rn (readnet) args: ip [port]")
+        print("rn (readnet) args: ip:port [ip:port [ip:port [...]]]")
         print()
         sys.exit(1)
 
@@ -285,3 +346,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+
