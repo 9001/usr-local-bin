@@ -3,7 +3,7 @@ from __future__ import print_function, unicode_literals
 
 
 """timecmp: compare system time"""
-__version__ = "2024-03-14"
+__version__ = "2024-04-07"
 __author__ = "ed <timecmp@ocv.me>"
 __credits__ = ["stackoverflow.com"]
 __license__ = "MIT"
@@ -13,7 +13,15 @@ __copyright__ = 2023
 import os
 import sys
 import time
+import struct
 import ctypes
+import itertools
+from datetime import datetime
+
+try:
+    from queue import Queue
+except:
+    from Queue import Queue  # py2
 
 try:
     import socket
@@ -25,8 +33,9 @@ except:
 ## directly between pipes (pointless, but a good example):
 # python3 timecmp wp 1 | python3 timecmp rp
 
-## more exciting over an ssh pipe between machines:
+## more exciting over an ssh pipe between machines (two equivalent alternatives):
 # ssh 10.1.2.9 'python - wp 1' <timecmp | python3 timecmp rp cool-banner
+# python3 timecmp rn ssh,10.1.2.9
 
 ## or, if ssh is not an option, use the native tcp transport:
 # run a server on some box:  python2 timecmp wn 1
@@ -35,6 +44,15 @@ except:
 ## or, if a firewall makes that impossible, invert it:
 # listen on receiver:  socat tcp4-l:8463,reuseaddr - | ./timecmp rp
 # connect from sender: ./timecmp wp 1 >/dev/tcp/10.1.2.34/8463
+
+## or connect to several targets at once:
+# ./timecmp  rn  10.1.2.3  10.1.2.4:8080  ntp,10.1.2.5  ssh,10.1.2.6  ssh,python3,ed@10.1.2.7  ssh,python2.7,id_rsa,root@10.1.2.8:573
+# -- 10.1.2.3 is a box running "timecmp wn 1"
+# -- 10.1.2.4 is a box running "timecmp wn 1 8080"
+# -- 10.1.2.5 is an ntp server
+# -- 10.1.2.6 accepts ssh connections as current-user and has "python3" installed
+# -- 10.1.2.7 accepts ssh connections as user 'ed' and has the python-binary "python312"
+# -- 10.1.2.8 accepts ssh connections on port 573 as root with ssh-key id_rsa and has the python-binary "python2.7"
 
 ## supports python 2.6 :^)
 
@@ -50,6 +68,20 @@ try:
     _ = TimeoutError
 except:
     TimeoutError = MemoryError
+
+try:
+    from datetime import datetime, timezone
+
+    _ = datetime.fromtimestamp(0, timezone.utc)
+
+    def humantime(unix):
+        return datetime.fromtimestamp(unix, timezone.utc).strftime("\033[36m%Y\033[0m%m%d\033[36m%H%M\033[0m%S.%f")[:-4]
+
+except:
+    from datetime import datetime
+
+    def humantime(unix):
+        return datetime.utcfromtimestamp(unix).strftime("\033[36m%Y\033[0m%m%d\033[36m%H%M\033[0m%S.%f")[:-4]
 
 
 def mprint(*a, **ka):
@@ -184,31 +216,109 @@ else:
             yield ln
 
 
-def get_remotes():
-    ret = []
-    ip = ""
-    for v in sys.argv[2:]:
-        if "." in v:
-            if ip:
-                ret.append(ip)
-            ip = v
-        elif ":" not in ip:
-            ip += ":" + v
-        else:
-            raise Exception("invalid arg %s after %s" % (v, ip))
-    if ip:
-        ret.append(ip)
-    return ret
-
-
 def readnet(target):
+    use_ntp = target.startswith("ntp,")
+    use_ssh = target.startswith("ssh,")
+    if use_ntp:
+        default_port = 123
+    elif use_ssh:
+        default_port = 0
+    else:
+        default_port = PORT
+
+    argv = target.split(",")
+    if len(argv) > 1:
+        argv.pop(0)
+
     try:
-        ip, port = target.split(":")
+        ip, port = argv[-1].split(":")
     except:
-        ip = target
-        port = PORT
+        ip = argv[-1]
+        port = default_port
     port = int(port)
 
+    if use_ntp:
+        fun = readnet_ntp
+    elif use_ssh:
+        fun = readnet_ssh
+    else:
+        fun = readnet_plain
+
+    try:
+        for v in fun(ip, port, argv[:-1]):
+            yield v
+    except Exception as ex:
+        yield "! %s (%r)" % (ex,ex)
+
+
+def readnet_ntp(ip, port, argv):
+    while True:
+        try:
+            sck = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sck.settimeout(3)
+            sck.sendto(b"\x1b" + 47 * b"\0", (ip, port))
+            msg, addr = sck.recvfrom(256)
+            rsp = struct.unpack(b"!12I", msg[:12*4])
+            utc = rsp[10] + float(rsp[11]) / 2**32 - 2208988800
+            yield "%f %f %f" % (utc,utc,utc)
+        except Exception as ex:
+            yield "! %s (%r)" % (ex,ex)
+        finally:
+            sck.close()
+        time.sleep(64)
+
+
+def readnet_ssh(ip, port, argv):
+    import subprocess as sp
+
+    local_cmd = ["ssh"]
+    if port:
+        local_cmd += ["-p", "%s" % (port,)]
+
+    if argv:
+        target_cmd = argv.pop(0)
+    else:
+        target_cmd = "python3"
+
+    if argv:
+        local_cmd += ["-i", argv.pop(0)]
+
+    cmd = local_cmd + [ip, target_cmd + " -u - wp 1"]
+    yield("! %r" % (cmd,))
+
+    p = sp.Popen(cmd, stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
+    with open(__file__, "rb") as f:
+        p.stdin.write(f.read())
+    p.stdin.close()
+
+    q = Queue()
+    def reader(src):
+        while True:
+            ln = src.readline()
+            if not ln:
+                q.put(None)
+                break
+            q.put(ln.rstrip().decode("ascii", "replace"))
+
+    for src in [p.stdout, p.stderr]:
+        thr = threading.Thread(target=reader, args=[src])
+        thr.daemon = True
+        thr.start()
+
+    eofs = 0
+    while True:
+        ln = q.get()
+        if ln is None:
+            eofs += 1
+            if eofs > 1:
+                time.sleep(3)
+                yield "! EOF"
+                return
+            continue
+        yield ln
+
+
+def readnet_plain(ip, port, argv):
     sck = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sck.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     sck.connect((ip, port))
@@ -216,7 +326,7 @@ def readnet(target):
     while True:
         b = sck.recv(1024)
         if not b:
-            mprint("bye")
+            yield "EOF"
             return
         buf += b
         if b"\n" not in buf:
@@ -236,7 +346,8 @@ def fcmp(src, sync, y=0, ip=""):
     if y:
         fmt = "\033[%dH" % (y,)
 
-    fmt += "%+.2f %+.4f %+.4f \033[36m%% %+.2f %+.2f %+.2f \033[0mu %.2f %.2f \033[36mm %.4f %.4f \033[0mw %.4f %.4f"
+    fmt0 = fmt
+    fmt += "%s\033[36m%8s\033[0m %+.2f %+.4f %+.4f \033[36m%% %+.2f %+.2f %+.2f \033[0mu %.2f %.2f \033[36mm %.4f %.4f \033[0mw %.4f %.4f"
     # u = uptime
     # m = monotonic
     # w = wallclock
@@ -245,7 +356,9 @@ def fcmp(src, sync, y=0, ip=""):
     # remaining fields = pairs of total (local,remote) u,m,w
 
     if y:
-        fmt += "  " + ip + "\033[99H\033[A"
+        fmt += "  " + ip + "\033[99H %s\033[A"
+    else:
+        fmt += "%s"
 
     if sync:
         # skip burst of initial items from pipe
@@ -262,14 +375,29 @@ def fcmp(src, sync, y=0, ip=""):
         # network/tcp; just go
         txt = next(src)
 
+    while True:
+        try:
+            ru0, rm0, rw0 = [float(x) for x in txt.split(" ")[:3]]
+            break
+        except:
+            print("%ssync:%s @%s\033[K" % (fmt0, txt, ip))
+            try:
+                txt = next(src)
+            except:
+                return
+
     n = 0
-    ru0, rm0, rw0 = [float(x) for x in txt.split(" ")[:3]]
     lm0 = rt_gettime()
     lu0 = get_uptime()
     lw0 = time.time()
-    print("\033[90m#-   L %.4f %.4f %.4f   R %.4f %.4f %.4f \033[0m" % (lu0, lm0, lw0, ru0, rm0, rw0))
-    for txt in src:
-        ru, rm, rw = [float(x) for x in txt.split(" ")[:3]]
+    print("%s\033[90m#-   L %.4f %.4f %.4f   R %.4f %.4f %.4f \033[0m" % (fmt0, lu0, lm0, lw0, ru0, rm0, rw0))
+    for txt in itertools.chain([txt], src):
+        try:
+            ru, rm, rw = [float(x) for x in txt.split(" ")[:3]]
+        except:
+            print("%smain:%s @%s\033[K" % (fmt0, txt, ip))
+            continue
+
         lm = rt_gettime()
         lu = get_uptime()
         lw = time.time()
@@ -283,20 +411,38 @@ def fcmp(src, sync, y=0, ip=""):
         tdm = tlm - trm
         tdw = tlw - trw
 
+        r8601 = humantime(rw)[:-3]
+
+        walldiff = lw - rw
+        if abs(walldiff) < 1000:
+            wds = "%+.2f" % (walldiff,)
+        elif abs(walldiff/60) < 100:
+            wds = "%+.2fM" % (walldiff/60,)
+        elif abs(walldiff/3600) < 100:
+            wds = "%+.2fH" % (walldiff/3600,)
+        else:
+            wds = "%+.0fH" % (walldiff/3600,)
+
         n += 1
         if n % 30 == 1 and not y:
-            print("\033[90m#%d   L %.4f %.4f %.4f   R %.4f %.4f %.4f \033[0m" % (n, lu, lm, lw, ru, rm, rw))
+            print("%s\033[90m#%d   L %.4f %.4f %.4f   R %.4f %.4f %.4f \033[0m" % (fmt0, n, lu, lm, lw, ru, rm, rw))
+
+        suf = humantime(time.time()) if y else ""
 
         mprint(fmt % (
+            r8601, wds,
+
             tdu, tdm, tdw,
 
-            100*(tdu/tlu),
-            100*(tdm/tlm),
-            100*(tdw/tlw),
+            100*(0 if tdu == tlu else tdu/tlu),
+            100*(0 if tdm == tlm else tdm/tlm),
+            100*(0 if tdw == tlw else tdw/tlw),
 
             tlu, tru,
             tlm, trm,
             tlw, trw,
+
+            suf
         ))
 
 
@@ -316,27 +462,29 @@ def main():
     elif cmd == "rp":
         return fcmp(readpipe(), True)
     elif cmd == "rn":
-        ips = get_remotes()
-        if len(ips) == 1:
-            return fcmp(readnet(ips[0]), False)
+        targets = sys.argv[2:]
+        if len(targets) == 1:
+            return fcmp(readnet(targets[0]), False)
         else:
             print("\033[H\033[J", end="")
             thrs = []
-            for n, ip in enumerate(ips):
+            for n, ip in enumerate(targets):
                 t = threading.Thread(target=multiread, args=(n,ip))
                 t.daemon = True
                 t.start()
                 thrs.append(t)
-            for t in thrs:
-                t.join()
+            while True:
+                time.sleep(0.1)
+                if not next((x for x in thrs if x.is_alive()), None):
+                    break
     else:
         print("need arg 1: wp | wn | rp | rn")
         print()
         print("wp (writepipe) args: [interval]")
         print("wn (writenet) args: [interval [port]]")
         print("rp (readpipe) args: [banner]")
-        print("rn (readnet) args: ip [port]")
-        print("rn (readnet) args: ip:port [ip:port [ip:port [...]]]")
+        print("rn (readnet) args: ip[:port]")
+        print("rn (readnet) args: ip[:port] [ip:port [ip:port [...]]]")
         print()
         sys.exit(1)
 
