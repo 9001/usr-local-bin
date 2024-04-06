@@ -7,6 +7,7 @@ set -e
 # step through all available console fonts and find one you like;
 # later you can manually set the font using "setfont thefont.psf"
 
+[ "$1" ] ||
 cd /usr/lib/kbd/consolefonts ||
 cd /usr/share/kbd/consolefonts ||
 cd /usr/share/consolefonts

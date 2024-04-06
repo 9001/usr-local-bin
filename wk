@@ -1,3 +1,6 @@
-xmodmap -e "keycode 49 = plusminus"
+#xmodmap -e "keycode 49 = plusminus"
+xmodmap -e "keycode 49 = Yacute"
 xmodmap -e "keycode 94 = grave asciitilde grave asciitilde dead_grave dead_tilde dead_grave"
-barrier
+#barrier
+input-leap
+
