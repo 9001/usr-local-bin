@@ -3,15 +3,36 @@ from __future__ import print_function
 import sys
 import tarfile
 import hashlib
-from datetime import datetime
 
 
 """hashtar.py: checksum tar contents without unpacking"""
-__version__   = "1.0"
+__version__   = "1.1"
 __author__    = "ed <hashtar@ocv.me>"
 __credits__   = ["stackoverflow.com"]
 __license__   = "MIT"
 __copyright__ = 2018
+
+
+try:
+	from datetime import datetime, timezone
+
+	UTC = timezone.utc
+except:
+	from datetime import datetime, timedelta, tzinfo
+
+	TD_ZERO = timedelta(0)
+
+	class _UTC(tzinfo):
+		def utcoffset(self, dt):
+			return TD_ZERO
+
+		def tzname(self, dt):
+			return "UTC"
+
+		def dst(self, dt):
+			return TD_ZERO
+	
+	UTC = _UTC()
 
 
 def eprint(*args, **kwargs):
@@ -45,7 +66,7 @@ else:
 	stdin = sys.stdin
 
 
-# will use blocksize 20*512 = 10KiB
+# use default blocksize 20*512 = 10KiB since most tarfiles are that
 tar = tarfile.open(mode='r|', fileobj=stdin)
 
 for ti in tar:
@@ -53,13 +74,10 @@ for ti in tar:
 		continue
 	
 	tf = tar.extractfile(ti)
+	rd_sz = 20480 if ti.size >= 40960 else 10240
 	hasher = hashlib.sha1()
-	while True:
-		buf = tf.read(20*512)
-		if not buf:
-			break
+	for buf in iter(lambda: tf.read(rd_sz), b''):
 		hasher.update(buf)
-	
 	cksum = hasher.hexdigest()
 	
 	if mode == 's':
@@ -67,8 +85,15 @@ for ti in tar:
 			cksum, ti.name))
 	
 	if mode == 'i':
-		mtime = datetime.utcfromtimestamp(ti.mtime)
-		mtime = mtime.strftime('%Y-%m-%d %H:%M:%S')
+		zd = datetime.fromtimestamp(ti.mtime, UTC)
+		mtime = "%04d-%02d-%02d %02d:%02d:%02d" % (
+			zd.year,
+			zd.month,
+			zd.day,
+			zd.hour,
+			zd.minute,
+			zd.second,
+		)
 		print('{:6o} {} {:>12} {} {}'.format(
 			ti.mode, mtime, ti.size, cksum, ti.name))
 
