@@ -9,20 +9,47 @@ import re
 import time
 import hashlib
 import threading
-from datetime import datetime
 
 
 """
 hashwalk.py: recursive sha1 checksum
              (runs faster in py3 than in py2)
 """
-__version__   = "1.3"
-__date__      = "2020-03-29"
+__version__   = "1.4"
+__date__      = "2024-06-23"
 __author__    = "ed <hashwalk@ocv.me>"
 __url__       = "https://ocv.me/dev/?hashwalk.py"
 __credits__   = ["stackoverflow.com"]
 __license__   = "MIT"
 __copyright__ = 2015
+
+
+try:
+	from queue import Queue
+except:
+	from Queue import Queue
+
+
+try:
+	from datetime import datetime, timezone
+
+	UTC = timezone.utc
+except:
+	from datetime import datetime, timedelta, tzinfo
+
+	TD_ZERO = timedelta(0)
+
+	class _UTC(tzinfo):
+		def utcoffset(self, dt):
+			return TD_ZERO
+
+		def tzname(self, dt):
+			return "UTC"
+
+		def dst(self, dt):
+			return TD_ZERO
+	
+	UTC = _UTC()
 
 
 if os.path.abspath(os.curdir) == '/':
@@ -31,11 +58,6 @@ if os.path.abspath(os.curdir) == '/':
 else:
 	# perform no filtering
 	excl_mask = re.compile(b'^$')
-
-
-# progress bar spec
-blocks = [ u'\u258f', u'\u258e', u'\u258d', u'\u258c', u'\u258b', u'\u258a', u'\u2589', u'\u2588' ]  
-fullblock = blocks[-1]
 
 
 def eprint(*args, **kwargs):
@@ -123,7 +145,7 @@ def termsize():
 class CTermsize(object):
 	def __init__(self):
 		self.ev = False
-		self.scroll_top = 0
+		self.scroll_y = 0
 		self.w, self.h = termsize()
 		
 		try:
@@ -144,20 +166,19 @@ class CTermsize(object):
 			self.ev = False
 			self.w, self.h = termsize()
 			
-			if self.scroll_top > 0:
-				self.scroll_region(self.scroll_top)
-			
-			#eprint(self.w, self.h)
+			if self.scroll_y:
+				self.scroll_region(self.scroll_y)
 
 	def ev_sig(self, signal=None, frame=None):
 		self.ev = True
 	
 	def scroll_region(self, y1):
-		self.scroll_top = y1
+		self.scroll_y = y1
 		if y1 == 0:
-			eprint('\033[r\033[{0};1H'.format(self.h))
+			eprint("\033[r\033[%dH" % (self.h,))
 		else:
-			eprint('\033[{0};{1}r'.format(y1, self.h), end='')
+			y1 = self.h + y1
+			eprint("\033[1;%dr\033[%dH" % (y1, y1 - 1), end='')
 
 ss = CTermsize()
 #while True:
@@ -190,12 +211,20 @@ def human1024(v):
 	return '{v:.{w}f} {s}'.format(v=v, w=width, s=suffix)
 
 
-def status(msg):
-	ueprint(u'\033[H{0}\033[K\033[{1};1H'.format(msg, ss.h-1))
+def status(msg, bar=""):
+	if bar:
+		msg += "\033[K\033[%dH%s\033[0m" % (ss.h - 2, bar)
+
+	ueprint(u"\033[%dH%s\033[K\033[%dH" % (ss.h - 1, msg, ss.h - 3), end="")
+	sys.stderr.flush()
 
 
-def walker(top):
+def walker(top, seen):
 	try:
+		atop = os.path.abspath(os.path.realpath(top))
+		if atop in seen:
+			return
+		seen = seen + [atop]
 		items = os.listdir(top)
 	except:
 		return
@@ -213,27 +242,29 @@ def walker(top):
 			continue
 		
 		if stat.S_ISLNK(mode):
-			sr = os.stat(path)
-			mode = sr.st_mode
-			if not stat.S_ISREG(mode):
+			try:
+				sr = os.stat(path)
+				mode = sr.st_mode
+			except:
 				continue
 		
 		if stat.S_ISDIR(mode):
 			if not excl_mask.search(path):
 				# py2 gets mad if we mention «yield from» at all
-				for v in walker(path):
+				for v in walker(path, seen):
 					yield v
 		
 		elif stat.S_ISREG(mode):
 			yield [ sr.st_mode, mtime, sr.st_size, path ]
 		
 		else:
-			ueprint(u'\033[1;31mSkipping {0}\033[0m'.format(path.decode('utf-8', 'ignore')))
+			t = u"\033[1;31mSkipping %o: %s\033[0m"
+			ueprint(t % (mode, path.decode("utf-8", "replace")))
 
 
-# allow screen scrolling between lines 3 and sh
-ss.scroll_region(3)
-eprint('\033[2JScanning directory...', end='')
+# allow screen scrolling between lines sh-3 and sh
+ss.scroll_region(-3)
+eprint('\033[2JScanning directory...')
 
 
 # TODO: make this less bad
@@ -246,6 +277,14 @@ stop = False
 tstart = None
 cur_file = u''
 def status_thread():
+	blocks = [ u'\u258f', u'\u258e', u'\u258d', u'\u258c', u'\u258b', u'\u258a', u'\u2589', u'\u2588' ]  
+	if os.environ.get("TERM", "").lower().startswith("linux"):
+		bch = [ u"░", u"▒", u"▓", u"█" ]
+		blocks = [ u"\033[35m%s\033[0m" % (x,) for x in bch ]
+		blocks += [ u"\033[1;37;45m%s\033[0m" % (x,) for x in bch ]
+		blocks += [ u"█" ]
+	fullblock = blocks[-1]
+
 	last_file = u''
 	bar = ' ' * ss.w
 	while not stop:
@@ -260,10 +299,9 @@ def status_thread():
 				human1000(nfiles), human1024(tsize)))
 		
 		elif nfiles == 0:
+			zs = u'Processed %s files and %s' % (human1000(nfile), human1024(nsize))
 			barchar = '/' if bar[-int(ss.w/5)] == ' ' else ' '
-			bar = bar[1:] + barchar
-			status(u'Processed {0} files and {1}\033[K\033[2;1H{2}'.format(
-				human1000(nfile), human1024(nsize), bar))
+			status(zs, bar[1:] + barchar)
 		
 		else:
 			fracf = nfile * 1. / nfiles
@@ -295,7 +333,7 @@ def status_thread():
 				msg += ', {:02d}:{:02d}:{:02d}'.format(
 					int(hours), int(minutes), int(seconds))
 			
-			status(msg + '\033[K\033[2;1H' + bar)
+			status(msg, bar)
 
 
 status_thr = threading.Thread(target=status_thread)
@@ -320,7 +358,7 @@ signal.signal(signal.SIGINT, cleanup)
 #tsize = (v.f_blocks - v.f_bfree) * v.f_bsize
 #nfiles = v.f_files
 if len(sys.argv) > 1:
-	for v in walker(b'.'):
+	for v in walker(b'.', []):
 		if stop:
 			break
 		
@@ -329,32 +367,64 @@ if len(sys.argv) > 1:
 		nfiles += 1
 
 
-tstart = time.time()
-eprint('\033[{}H'.format(ss.h), end='')
+cq = Queue(8)
+hq = Queue()
+def hthr():
+	hasher = hashlib.sha1()
+	while True:
+		b = cq.get()
+		if b:
+			hasher.update(b)
+		else:
+			hq.put(hasher.hexdigest())
+			hasher = hashlib.sha1()
 
-for item in walker(b'.'):
+t = threading.Thread(target=hthr)
+t.daemon = True
+t.start()
+
+
+tstart = time.time()
+
+for item in walker(b'.', []):
 	if stop:
 		break
 
 	fmode, ftime, fsize, fpath = item
 	nfile += 1
 	try:
-		unicode_path = fpath.decode('utf-8', 'ignore')
+		unicode_path = fpath.decode('utf-8', 'replace')
 		cur_file = unicode_path
 		
 		try:
-			hasher = hashlib.sha1()
-			with open(fpath, 'rb', 512*1024) as f:
-				fpos = 0
-				for block in iter(lambda: f.read(64*1024), b''):
-					fpos += len(block)
-					hasher.update(block)
-			
-			cksum = hasher.hexdigest()
+			if fsize > 512*1024:
+				with open(fpath, 'rb', 256*1024) as f:
+					for block in iter(lambda: f.read(256*1024), b''):
+						fpos += len(block)
+						cq.put(block)
+					cq.put(b"")
+				cksum = hq.get()
+			else:
+				hasher = hashlib.sha1()
+				with open(fpath, 'rb', 256*1024) as f:
+					for block in iter(lambda: f.read(256*1024), b''):
+						fpos += len(block)
+						hasher.update(block)
+				cksum = hasher.hexdigest()
 		except:
 			cksum = 'x'*40
+			cq.put(b"")
+			hq.get()
 		
-		ftimestr = datetime.utcfromtimestamp(ftime).strftime('%Y-%m-%d %H:%M:%S')
+		zd = datetime.fromtimestamp(ftime, UTC)
+		ftimestr = "%04d-%02d-%02d %02d:%02d:%02d" % (
+			zd.year,
+			zd.month,
+			zd.day,
+			zd.hour,
+			zd.minute,
+			zd.second,
+		)
 		
 		uprint(u'{0:6o} {1} {2:12} {3} {4}'.format(
 			fmode, ftimestr, fsize, cksum, unicode_path))
@@ -363,6 +433,7 @@ for item in walker(b'.'):
 		eprint(ex)
 	
 	nsize += fsize
+	fpos = 0
 
 
 cleanup()
