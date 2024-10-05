@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import print_function, unicode_literals
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 """
 migratory - data conveyor
 2018, ed <irc.rizon.net>, MIT-licensed, https://github.com/9001/usr-local-bin
+
+monitors a source folder for new files to become stable (no changes to either
+the filesize or last-modified timestamp for a given period of time) and then
+either copies or moves the file to the destination folder
 
 runs in python 3.6 and later by default,
 but if you really need 2.6 or 2.7 support:
@@ -226,6 +230,8 @@ class Dirmon(object):
         dst: str,
         keep_src: bool,
         log: List[str],
+        sf1: List[str],
+        sf2: List[str],
         debounce: float,
         dir_linger: float,
         keep_ptn: Optional[Pattern],
@@ -234,6 +240,8 @@ class Dirmon(object):
         self.dst = dst  # abspath to copy/move files to
         self.keep = keep_src  # True=copy, False=move
         self.log = log  # file(s) to write transfer log to
+        self.statefile1 = sf1  # file(s) to log names of pending/busy files to
+        self.statefile2 = sf2  # file(s) to touch when going idle after a transfer
         self.debounce = debounce  # how long a file must remain stable before acting
         self.dir_linger = dir_linger  # how long to keep each empty dir in src
         self.keep_ptn = keep_ptn  # regex of files/folders to never delete
@@ -305,7 +313,7 @@ class Dirmon(object):
                     nonempty_dirs.add(ap)
         for ap in list(nonempty_dirs):
             while len(ap) >= len(base_src_ap):
-                maybe_empty_dirs.remove(ap)
+                maybe_empty_dirs.discard(ap)
                 self.empty_dirs.pop(ap, None)
                 ap = ap.rsplit(os.sep, 1)[0]
         for ap in list(maybe_empty_dirs):
@@ -316,10 +324,12 @@ class Dirmon(object):
         # debug("%d known_files, %d last_change, %d empty_dirs", len(self.known_files), len(self.last_change), len(self.empty_dirs))
 
         ready = []
+        not_ready = []
         for src_ap, ts in self.last_change.items():
             if now - ts < self.debounce:
                 remains = self.debounce - (now - ts)
                 debug("waiting %.1fs for %s", remains, src_ap)
+                not_ready.append(src_ap)
                 continue
 
             mt_and_sz = self.known_files[src_ap]
@@ -327,6 +337,29 @@ class Dirmon(object):
                 continue  # not modified since last copy; skip
 
             ready.append((src_ap, ts))
+
+        if self.statefile1:
+            # write list of busy files
+            ready_paths = [x[0] for x in ready]
+            ready_paths.sort()
+            not_ready.sort()
+            txt = "# %d files are being transferred to destination:\n%s\n\n# %d pending busy files in source folder:\n%s\n\n"
+            txt = txt % (
+                len(ready_paths),
+                "\n".join([x[len(base_src_ap) :] for x in ready_paths]),
+                len(not_ready),
+                "\n".join([x[len(base_src_ap) :] for x in not_ready]),
+            )
+            buf = txt.encode("utf-8", "replace")
+            for ap in self.statefile1:
+                try:
+                    with open(ap, "rb") as f:
+                        if f.read() == buf:
+                            continue
+                except:
+                    pass
+                with open(ap, "wb") as f:
+                    f.write(buf)
 
         dgst = ""
         for src_ap, ts in ready:
@@ -462,6 +495,13 @@ class Dirmon(object):
                 with open(logfile, "ab+") as f:
                     f.write(log_entry)
 
+        if self.statefile2 and dgst:
+            # write timestamp to indicate activity
+            now = ("%.3f\n" % (time.time(),)).encode("utf-8")
+            for ap in self.statefile2:
+                with open(ap, "wb") as f:
+                    f.write(now)
+
     def run(self, interval, quant):
         while True:
             self.check_once()
@@ -500,15 +540,23 @@ def main():
             pass
     info("using %s as file hasher", Hasher)
 
+    # args which accept one or more path (semicolon-separated)
+    multipath = "log sf1 sf2".split()
+
     # fmt: off
     desc = "migratory (data conveyor) v" + VERSION + " - https://youtu.be/bI7U-b7ncYw"
     usage = "see -h / --help" if len(sys.argv) < 2 else None
-    ap = argparse.ArgumentParser(formatter_class=APF, description=desc, usage=usage)
+    ap = argparse.ArgumentParser(
+        formatter_class=APF, description=desc, usage=usage,
+        epilog="these args take a semicolon-separated list of PATHs: --%s\n " % (" --".join(multipath)),
+    )
     ap.add_argument("--src", type=unicode, metavar="PATH", required=True, help="source folder to monitor")
     ap.add_argument("--dst", type=unicode, metavar="PATH", required=True, help="destination folder to write into")
     ap.add_argument("--mv", action="store_true", help="move (instead of copy) from SRC to DST")
     ap.add_argument("--debug", action="store_true", help="what bugs? :^)")
-    ap.add_argument("--log", type=unicode, metavar="PATH", default="", help="write log to textfile(s) at PATH (one or more, semicolon-separated)")
+    ap.add_argument("--log", type=unicode, metavar="PATH", default="", help="write log to textfile at PATH")
+    ap.add_argument("--sf1", type=unicode, metavar="PATH", default="", help="list unstable/pending source files to PATH")
+    ap.add_argument("--sf2", type=unicode, metavar="PATH", default="", help="write unixtime to PATH when going idle after a transfer")
     ap.add_argument("--rate", type=float, metavar="SEC", default=1, help="how often to scan SRC for changes")
     ap.add_argument("--wait", type=float, metavar="SEC", default=7, help="how long to wait for a file to settle; 0 is very dangerous")
     ap.add_argument("--edir", type=float, metavar="SEC", default=69, help="how long to keep empty folders in SRC; 0 removes immediately")
@@ -521,7 +569,12 @@ def main():
     src = os.path.abspath(os.path.realpath(ar.src))
     dst = os.path.abspath(os.path.realpath(ar.dst))
     keep = re.compile(ar.keep) if ar.keep else None
-    ar.log = [x.strip() for x in (ar.log.split(";") if ar.log else [])]
+
+    # expand semicolon-separated values into lists
+    for name in multipath:
+        value = getattr(ar, name)
+        values = [x.strip() for x in (value.split(";") if value else [])]
+        setattr(ar, name, values)
 
     info("SRC (monitoring): %s", src)
     info("DST (output-dir): %s", dst)
@@ -538,6 +591,8 @@ def main():
         dst=dst,
         keep_src=not ar.mv,
         log=ar.log,
+        sf1=ar.sf1,
+        sf2=ar.sf2,
         debounce=ar.wait,
         dir_linger=ar.edir,
         keep_ptn=keep,
