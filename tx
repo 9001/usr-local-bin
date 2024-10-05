@@ -1,5 +1,107 @@
 #!/bin/bash
 set -e
-fps=${1:-60}
-while true; do nice ffmpeg -nostdin -hide_banner -flush_packets 1 -fflags +nobuffer -flags +low_delay -flags2 fast -f x11grab -framerate $fps -s $(xrandr | awk '/ connected /{sub(/\+.*/,"");print$NF}') -i :0.0+0,0 -flags2 fast -pix_fmt yuv444p -vcodec libx264 -tune zerolatency -preset ultrafast -g 30 -crf 32 -coder 0 -bf 0 -flags -loop -wpredp 0 -listen 1 -f mpegts -flags2 fast tcp://0.0.0.0:3737/; sleep 0.2; done
 
+fps=${1:-60}
+
+METHOD=kms2
+# kms1 = 120ms latency, cpu-efficient (~2%); needs hwaccel and must run as root, low-res colors
+# kms2 =  90ms latency, still cpu-efficient, needs hwaccel and must run as root, good colors
+# x11  =  50ms latency, uses 40% cpu(!), works without hwaccel/root, good colors
+
+#======================================================================#
+
+# inspiration for other tweaks:
+# ffmpeg -h encoder=h264_vaapi
+
+devc=(/dev/dri/card*)
+devr=(/dev/dri/renderD*)
+xres=$(xrandr | awk '/ connected /{sub(/\+.*/,"");print$NF}')
+kres="w=$(echo $xres | awk '{sub(/\+.*/,"");v=$NF;sub(/x/,":h=",v);print v}')"
+
+sw_enc=(
+	-flags2 fast
+	-pix_fmt yuv444p
+	-vcodec libx264
+	-preset ultrafast
+	-tune zerolatency
+	-intra-refresh 1
+	-g 30
+	-crf 32
+	-coder 0
+	-bf 0
+	-flags -loop
+	-wpredp 0
+)
+
+if [ $METHOD = kms1 ]; then
+	echo $devc + $devr @ $kres
+	cap=(
+		-device $devc
+		-f kmsgrab
+		-i -
+		-vaapi_device $devr
+		#-vf "hwmap=derive_device=vaapi,scale_vaapi=$kres:format=nv12"
+		-vf "hwmap=derive_device=vaapi,scale_vaapi=format=nv12"
+	)
+	h264=(
+		-c:v h264_vaapi
+		# -b:v 4000k -maxrate 8000k  # cbr
+		-qp 24  # vbr
+		-profile:v 100
+		-bufsize 0
+		-bf 0
+	)
+	h265=(
+		-c:v hevc_vaapi
+		-rc_mode CQP -qp 24
+		-idr_interval 1
+	)
+	cap+=( "${h264[@]}" )
+elif [ $METHOD = kms2 ]; then
+	echo $devc + $devr @ $xres
+	cap=(
+		#-r 120
+		-device $devc
+		-f kmsgrab
+		-i -
+		-vaapi_device $devr
+		-vf "hwmap=derive_device=vaapi,hwdownload,format=bgr0" #,fps=60"
+		-s $xres
+		"${sw_enc[@]}"
+	)
+elif [ $METHOD = x11 ]; then
+	echo x11grab @ $xres
+	cap=(
+		-f x11grab
+		-framerate $fps
+		-s $xres
+		-i :0.0+0,0
+		"${sw_enc[@]}"
+	)
+fi
+
+dst=(-listen 1 -f mpegts -flags2 fast tcp://0.0.0.0:3737/)
+#dst=(-f mpegts -flags2 fast udp://10.1.2.157:3737/)
+
+cmd=( ffmpeg
+	-nostdin -hide_banner -flush_packets 1 -fflags +nobuffer -flags +low_delay -flags2 fast -sws_flags fast_bilinear
+	"${cap[@]}"
+	-syncpoints none -flags2 fast
+	"${dst[@]}"
+)
+
+printf '[%s]\n' "${cmd[@]}"
+
+while true; do nice "${cmd[@]}"; sleep 0.2; done
+
+
+
+exit 0
+
+# setup notes on alpine
+apk add ffmpeg xrandr git imagemagick make gcc libc-dev gtk+3.0-dev
+git clone https://github.com/andykitchen/swcursor
+cd swcursor
+make
+convert -scale 33% cursor.png 33.png
+./swcursor 33.png 
