@@ -3,7 +3,7 @@ from __future__ import print_function, unicode_literals
 
 
 """timecmp: compare system time"""
-__version__ = "2024-04-07"
+__version__ = "2025-01-21"
 __author__ = "ed <timecmp@ocv.me>"
 __credits__ = ["stackoverflow.com"]
 __license__ = "MIT"
@@ -13,6 +13,8 @@ __copyright__ = 2023
 import os
 import sys
 import time
+import calendar
+import random
 import struct
 import ctypes
 import itertools
@@ -46,13 +48,19 @@ except:
 # connect from sender: ./timecmp wp 1 >/dev/tcp/10.1.2.34/8463
 
 ## or connect to several targets at once:
-# ./timecmp  rn  10.1.2.3  10.1.2.4:8080  ntp,10.1.2.5  ssh,10.1.2.6  ssh,python3,ed@10.1.2.7  ssh,python2.7,id_rsa,root@10.1.2.8:573
+# ./timecmp  rn  10.1.2.3  10.1.2.4:8080  ntp,10.1.2.5  ssh,10.1.2.6  ssh,python3,ed@10.1.2.7  ssh,python2.7,id_rsa,root@10.1.2.8:573  icmp,3,10.1.2.9  icmp,3,w,10.1.2.10
 # -- 10.1.2.3 is a box running "timecmp wn 1"
 # -- 10.1.2.4 is a box running "timecmp wn 1 8080"
 # -- 10.1.2.5 is an ntp server
 # -- 10.1.2.6 accepts ssh connections as current-user and has "python3" installed
 # -- 10.1.2.7 accepts ssh connections as user 'ed' and has the python-binary "python312"
 # -- 10.1.2.8 accepts ssh connections on port 573 as root with ssh-key id_rsa and has the python-binary "python2.7"
+# -- 10.1.2.9 accepts icmp timestamp queries (nice) so ask it every 3sec
+# -- 10.1.2.10 accepts icmp timestamp queries but unfortunately it's running windows so it speaks in reverse
+
+## notes:
+# - to allow icmp-time on win10: firewall -> inbound rules -> new rule -> custom ->
+#    all programs -> protocol:icmpv4, customize:specificType:timestampRequest
 
 ## supports python 2.6 :^)
 
@@ -84,9 +92,110 @@ except:
         return datetime.utcfromtimestamp(unix).strftime("\033[36m%Y\033[0m%m%d\033[36m%H%M\033[0m%S.%f")[:-4]
 
 
+if hasattr(random, "randbytes"):
+    randbytes = random.randbytes
+else:
+    def randbytes(haha):
+        return struct.pack(b"<I", int(random.random() * 0xffffff00))
+
+
 def mprint(*a, **ka):
     with mutex:
         print(*a, **ka)
+
+
+class ICMP(object):
+    def __init__(self):
+        self.ip_qie = {}  # ip:(queue,interval,endianness)
+        self.ip_new = set()  # newly-added
+        self.sck = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+        t = threading.Thread(target=self.run)
+        t.daemon = True
+        t.start()
+
+    def add(self, ip, que, interval=11, little_endian=False):
+        # windows has little-endian energy
+        self.ip_qie[ip] = (que, float(interval), b"<I" if little_endian else b">I")
+        self.ip_new.add(ip)
+
+    def run(self):
+        fourteen = "\x0e" if PY2 else 14  # icmp response-type byte
+
+        # pending queries
+        rid_ip_ts = {}  # rid:(ip,time-sent)
+        ip_rid = {}  # ip:rid
+
+        # scheduled queries
+        ip_dl = {}  # ip:deadline
+
+        last_chk = 0
+        next_deadline = 0
+        daystart = next_day = 0
+        while True:
+            now = time.time()
+            if now >= next_day:
+                try:
+                    dt = datetime.fromtimestamp(now, timezone.utc)
+                except:
+                    dt = datetime.utcfromtimestamp(now)
+                zy, zm, zd = list(dt.utctimetuple())[:3]
+                daystart = calendar.timegm((zy, zm, zd, 0, 0, 0))
+                next_day = daystart + 86400  # usually close enough
+
+            if self.ip_new:
+                ip = next(iter(self.ip_new))
+                self.ip_new.remove(ip)
+                ip_dl[ip] = next_deadline = 0
+
+            if now >= next_deadline and now - last_chk > 0.01:
+                last_chk = now
+                for ip, deadline in ip_dl.items():
+                    if deadline > now:
+                        continue
+                    if ip in ip_rid:
+                        del rid_ip_ts[ip_rid[ip]]
+                    rid = randbytes(4) + struct.pack(b">I", int((time.time() - daystart) * 1000))
+                    csum = sum(struct.unpack(b">5H", b"\x0d\x00" + rid))
+                    csum = (csum >> 16) + (csum & 0xffff)
+                    buf = struct.pack(b">H", ~csum & 0xffff)
+                    buf = b"\x0d\x00" + buf + rid + b"\x00\x00\x00\x00\x00\x00\x00\x00"
+                    # print("sending req", repr(ip), len(buf), repr(buf))
+                    self.sck.sendto(buf, (ip, 0))
+                    now = time.time()
+                    rid_ip_ts[rid] = (ip, now)
+                    ip_rid[ip] = rid
+                    ip_dl[ip] = next_deadline = now + self.ip_qie[ip][1]
+                    break  # we modified the iterator source + we don't wanna flood the net
+                for deadline in ip_dl.values():
+                    if next_deadline > deadline:
+                        next_deadline = deadline
+
+            self.sck.settimeout(1 if next_deadline - now >= 1 else 0.01)
+            try:
+                buf, addr = self.sck.recvfrom(60)
+            except socket.timeout:
+                continue
+            if len(buf) < 40 or buf[20] != fourteen:
+                continue
+            now = time.time()
+            rid = buf[24:32]
+            if rid not in rid_ip_ts:
+                continue
+            ip, sent = rid_ip_ts.pop(rid)
+            que, _, endianness = self.ip_qie[ip]
+            del ip_rid[ip]
+            ts_cli = struct.unpack(endianness, buf[36:40])[0]
+            ret = float(ts_cli) / 1000.0 + daystart + (now - sent) / 2
+            td = now - ret
+            if td < -43200:
+                ret += 86400
+            elif td > 43200:
+                ret -= 86400
+            que.put(ret)
+
+
+if " icmp," in " ".join(sys.argv):
+    icmp = ICMP()
 
 
 class timespec(ctypes.Structure):
@@ -219,6 +328,7 @@ else:
 def readnet(target):
     use_ntp = target.startswith("ntp,")
     use_ssh = target.startswith("ssh,")
+    use_icmp = target.startswith("icmp,")
     if use_ntp:
         default_port = 123
     elif use_ssh:
@@ -241,6 +351,8 @@ def readnet(target):
         fun = readnet_ntp
     elif use_ssh:
         fun = readnet_ssh
+    elif use_icmp:
+        fun = readnet_icmp
     else:
         fun = readnet_plain
 
@@ -249,6 +361,14 @@ def readnet(target):
             yield v
     except Exception as ex:
         yield "! %s (%r)" % (ex,ex)
+
+
+def readnet_icmp(ip, port, argv):
+    q = Queue()
+    icmp.add(ip, q, *argv)
+    while True:
+        v = q.get()
+        yield "%f %f %f" % (v,v,v)
 
 
 def readnet_ntp(ip, port, argv):
@@ -347,7 +467,7 @@ def fcmp(src, sync, y=0, ip=""):
         fmt = "\033[%dH" % (y,)
 
     fmt0 = fmt
-    fmt += "%s\033[36m%8s\033[0m %+.2f %+.4f %+.4f \033[36m%% %+.2f %+.2f %+.2f \033[0mu %.2f %.2f \033[36mm %.4f %.4f \033[0mw %.4f %.4f"
+    fmt += "%s\033[36m%8s\033[0m %+.2f %+.4f %+.4f \033[36m%% %+.2f %+.3f %+.3f \033[0mu %.2f %.2f \033[36mm %.4f %.4f \033[0mw %.4f %.4f"
     # u = uptime
     # m = monotonic
     # w = wallclock
@@ -414,11 +534,14 @@ def fcmp(src, sync, y=0, ip=""):
         r8601 = humantime(rw)[:-3]
 
         walldiff = lw - rw
-        if abs(walldiff) < 1000:
+        abs_wd = abs(walldiff)
+        if abs_wd < 100:
+            wds = "%+.3f" % (walldiff,)
+        elif abs_wd < 1000:
             wds = "%+.2f" % (walldiff,)
-        elif abs(walldiff/60) < 100:
+        elif abs_wd/60 < 100:
             wds = "%+.2fM" % (walldiff/60,)
-        elif abs(walldiff/3600) < 100:
+        elif abs_wd/3600 < 100:
             wds = "%+.2fH" % (walldiff/3600,)
         else:
             wds = "%+.0fH" % (walldiff/3600,)
