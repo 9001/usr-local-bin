@@ -187,11 +187,15 @@ class ICMP(object):
             ts_cli = struct.unpack(endianness, buf[36:40])[0]
             ret = float(ts_cli) / 1000.0 + daystart + (now - sent) / 2
             td = now - ret
-            if td < -43200:
-                ret += 86400
+            abs_td = abs(td)
+            if abs_td < 43200:
+                que.put(ret)
+            elif abs_td > 86400:
+                que.put("windows detected")
+            elif td < -43200:
+                que.put(ret - 86400)
             elif td > 43200:
-                ret -= 86400
-            que.put(ret)
+                que.put(ret + 86400)
 
 
 if " icmp," in " ".join(sys.argv):
@@ -366,12 +370,20 @@ def readnet(target):
 def readnet_icmp(ip, port, argv):
     q = Queue()
     icmp.add(ip, q, *argv)
-    while True:
-        v = q.get()
-        yield "%f %f %f" % (v,v,v)
+    try:
+        while True:
+            v = q.get()
+            yield "%f %f %f" % (v,v,v)
+    except:
+        yield "! %s" % (v,)
 
 
 def readnet_ntp(ip, port, argv):
+    try:
+        slp = float(argv[0])
+    except:
+        slp = 64
+
     while True:
         try:
             sck = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -385,7 +397,7 @@ def readnet_ntp(ip, port, argv):
             yield "! %s (%r)" % (ex,ex)
         finally:
             sck.close()
-        time.sleep(64)
+        time.sleep(slp)
 
 
 def readnet_ssh(ip, port, argv):
@@ -404,7 +416,7 @@ def readnet_ssh(ip, port, argv):
         local_cmd += ["-i", argv.pop(0)]
 
     cmd = local_cmd + [ip, target_cmd + " -u - wp 1"]
-    yield("! %r" % (cmd,))
+    yield ("! %r" % (cmd,))
 
     p = sp.Popen(cmd, stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE)
     with open(__file__, "rb") as f:
@@ -467,7 +479,7 @@ def fcmp(src, sync, y=0, ip=""):
         fmt = "\033[%dH" % (y,)
 
     fmt0 = fmt
-    fmt += "%s\033[36m%8s\033[0m %+.2f %+.4f %+.4f \033[36m%% %+.2f %+.3f %+.3f \033[0mu %.2f %.2f \033[36mm %.4f %.4f \033[0mw %.4f %.4f"
+    fmt += "%s\033[36m%8s\033[0m %+.2f %+.4f %+.4f \033[36m%% %+.2f %+.3f %+.3f \033[0mu %.2f %.2f \033[36mm %.4f %.4f \033[0mw %.4f %.4f \033[K"
     # u = uptime
     # m = monotonic
     # w = wallclock
@@ -536,13 +548,13 @@ def fcmp(src, sync, y=0, ip=""):
         walldiff = lw - rw
         abs_wd = abs(walldiff)
         if abs_wd < 100:
-            wds = "%+.3f" % (walldiff,)
+            wds = "%+.4f" % (walldiff,)
         elif abs_wd < 1000:
-            wds = "%+.2f" % (walldiff,)
+            wds = "%+.3f" % (walldiff,)
         elif abs_wd/60 < 100:
-            wds = "%+.2fM" % (walldiff/60,)
+            wds = "%+.3fM" % (walldiff/60,)
         elif abs_wd/3600 < 100:
-            wds = "%+.2fH" % (walldiff/3600,)
+            wds = "%+.3fH" % (walldiff/3600,)
         else:
             wds = "%+.0fH" % (walldiff/3600,)
 
@@ -557,9 +569,9 @@ def fcmp(src, sync, y=0, ip=""):
 
             tdu, tdm, tdw,
 
-            100*(0 if tdu == tlu else tdu/tlu),
-            100*(0 if tdm == tlm else tdm/tlm),
-            100*(0 if tdw == tlw else tdw/tlw),
+            100*(0 if tdu == tlu else tdu/(tlu or 0.01)),
+            100*(0 if tdm == tlm else tdm/(tlm or 0.01)),
+            100*(0 if tdw == tlw else tdw/(tlw or 0.01)),
 
             tlu, tru,
             tlm, trm,
@@ -608,6 +620,13 @@ def main():
         print("rp (readpipe) args: [banner]")
         print("rn (readnet) args: ip[:port]")
         print("rn (readnet) args: ip[:port] [ip:port [ip:port [...]]]")
+        print()
+        print("rn ntp,pool.ntp.org     # a good box on the internets")
+        print("rn ntp,3,kurisu.local   # every 3 sec from a lan node")
+        print("rn icmp,192.168.2.3     # icmp; inaccurate, root-only")
+        print("rn icmp,1,w,10.1.2.3    # each sec from a windows box")
+        print()
+        print("ssh 10.1.2.9 'python - wp 1' <timecmp | timecmp rp")
         print()
         sys.exit(1)
 
