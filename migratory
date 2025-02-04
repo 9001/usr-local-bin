@@ -271,8 +271,13 @@ class Dirmon(object):
         # relpaths of files which have already been ignored
         self.ignored_files: set[str] = set()
 
+        self.msg_scanning = 0  # time last logged
+
     def check_once(self):
-        debug("scanning...")
+        now = time.time()
+        if now - self.msg_scanning >= 180:
+            self.msg_scanning = now
+            debug("scanning...")
         err = []
         log = []
         do_log = bool(self.log)
@@ -474,6 +479,8 @@ class Dirmon(object):
                     dt_file = unix2iso(st.st_mtime)
                     t = "%s | %s | %12s | %s | %s"
                     log.append(t % (dt_now, dt_file, st.st_size, dgst, relpath))
+
+                self.msg_scanning = 0
 
             except Exception as ex:
                 warn("%s [%s] to [%s] failed; %r", action_text, src_ap, dst_ap, ex)
