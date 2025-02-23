@@ -271,6 +271,7 @@ class Dirmon(object):
         # relpaths of files which have already been ignored
         self.ignored_files: set[str] = set()
 
+        self.kept_dirs: set[str] = set()  # empty folders kept by --kept
         self.msg_scanning = 0  # time last logged
 
     def check_once(self):
@@ -330,8 +331,10 @@ class Dirmon(object):
                     continue
                 relpath = ap[len(base_src_ap) :]
                 if self.keep_ptn.match(relpath):
-                    debug("folder kept by pattern: %s", relpath)
                     nonempty_dirs.add(ap)
+                    if ap not in self.kept_dirs:
+                        self.kept_dirs.add(ap)
+                        debug("folder kept by pattern: %s", relpath)
         for ap in list(nonempty_dirs):
             while len(ap) >= len(base_src_ap):
                 maybe_empty_dirs.discard(ap)
@@ -484,6 +487,9 @@ class Dirmon(object):
 
             except Exception as ex:
                 warn("%s [%s] to [%s] failed; %r", action_text, src_ap, dst_ap, ex)
+                # in case file disappeared during debounce:
+                self.last_change.pop(src_ap, None)
+                self.known_files.pop(src_ap, None)
 
         while True:
             num_dropped = 0
