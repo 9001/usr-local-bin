@@ -251,14 +251,10 @@ class Dirmon(object):
         self.keep_ptn = keep_ptn  # regex of files/folders to never delete
         self.ign_ptn = ign_ptn  # regex of files/folders to ignore in src
 
-        # abspath => unix-time;
-        # last time each file had its attributes (mtime/size) modified
-        self.last_change: dict[str, float] = {}
-
-        # abspath => (mtime, filesize);
-        # files which have recently appeared and are pending;
-        # in lockstep with last_change
-        self.known_files: dict[str, Tuple[float, int]] = {}
+        # abspath => (unix-time, (mtime, filesize));
+        # files which have recently appeared and are pending transfer;
+        # most recent unix-time when the inode-attrs (mtime,size) changed
+        self.known_files: dict[str, Tuple[float, Tuple[float, int]]] = {}
 
         # abspath => (mtime, filesize);
         # files which have already been copied to dst
@@ -309,11 +305,11 @@ class Dirmon(object):
                     debug("file ignored by pattern: %s", relpath)
                 continue
             mt_and_sz = (st.st_mtime, st.st_size)
-            if ap not in self.known_files:
-                num_new += 1
-            if self.known_files.get(ap) != mt_and_sz:
-                self.known_files[ap] = mt_and_sz
-                self.last_change[ap] = now
+            known = self.known_files.get(ap)
+            if (not known) or known[1] != mt_and_sz:
+                if not known:
+                    num_new += 1
+                self.known_files[ap] = (now, mt_and_sz)
                 debug("file changed: %s", ap)
 
         for txt in err:
@@ -345,32 +341,30 @@ class Dirmon(object):
                 self.empty_dirs[ap] = now
                 debug("found empty directory %s", ap)
 
-        # debug("%d known_files, %d last_change, %d empty_dirs", len(self.known_files), len(self.last_change), len(self.empty_dirs))
+        # debug("%d known_files, %d empty_dirs", len(self.known_files), len(self.empty_dirs))
 
         ready = []
         not_ready = []
-        for src_ap, ts in self.last_change.items():
+        for src_ap, (ts, mt_and_sz) in self.known_files.items():
             if now - ts < self.debounce:
                 remains = self.debounce - (now - ts)
                 debug("waiting %.1fs for %s", remains, src_ap)
                 not_ready.append(src_ap)
                 continue
 
-            mt_and_sz = self.known_files[src_ap]
             if self.kept_files.get(src_ap) == mt_and_sz:
                 continue  # not modified since last copy; skip
 
-            ready.append((src_ap, ts))
+            ready.append(src_ap)
 
         if self.statefile1:
             # write list of busy files
-            ready_paths = [x[0] for x in ready]
-            ready_paths.sort()
+            ready.sort()
             not_ready.sort()
             txt = "# %d files are being transferred to destination:\n%s\n\n# %d pending busy files in source folder:\n%s\n\n"
             txt = txt % (
-                len(ready_paths),
-                "\n".join([x[len(base_src_ap) :] for x in ready_paths]),
+                len(ready),
+                "\n".join([x[len(base_src_ap) :] for x in ready]),
                 len(not_ready),
                 "\n".join([x[len(base_src_ap) :] for x in not_ready]),
             )
@@ -386,8 +380,8 @@ class Dirmon(object):
                     f.write(buf)
 
         dgst = ""
-        for src_ap, ts in ready:
-            mt_and_sz = self.known_files[src_ap]
+        for src_ap in ready:
+            ts, mt_and_sz = self.known_files[src_ap]
             dst_ap = os.path.join(self.dst, src_ap[len(base_src_ap) :])
             try:
                 debug("file ready for transfer: %s", src_ap)
@@ -405,7 +399,6 @@ class Dirmon(object):
                     copystat(src_ap, dst_ap)
                     if not self.keep:
                         os.unlink(src_ap)
-                        del self.last_change[src_ap]
                         del self.known_files[src_ap]
                         del self.kept_files[src_ap]
                     continue
@@ -462,7 +455,6 @@ class Dirmon(object):
                             os.unlink(dst_ap)
                         dgst, dur = copyfile(src_ap, dst_ap)
                         os.unlink(src_ap)
-                    del self.last_change[src_ap]
                     del self.known_files[src_ap]
                     if not self.dir_linger:
                         try:
@@ -488,7 +480,6 @@ class Dirmon(object):
             except Exception as ex:
                 warn("%s [%s] to [%s] failed; %r", action_text, src_ap, dst_ap, ex)
                 # in case file disappeared during debounce:
-                self.last_change.pop(src_ap, None)
                 self.known_files.pop(src_ap, None)
 
         while True:
