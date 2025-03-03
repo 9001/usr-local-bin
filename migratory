@@ -381,7 +381,7 @@ class Dirmon(object):
 
         dgst = ""
         for src_ap in ready:
-            ts, mt_and_sz = self.known_files[src_ap]
+            ts, (f_mt, f_sz) = self.known_files[src_ap]
             dst_ap = os.path.join(self.dst, src_ap[len(base_src_ap) :])
             try:
                 debug("file ready for transfer: %s", src_ap)
@@ -395,7 +395,7 @@ class Dirmon(object):
                     src_dgst = ""
                 if src_dgst == dst_dgst:
                     info("target exists with same contents; skipping %s", src_ap)
-                    self.kept_files[src_ap] = mt_and_sz
+                    self.kept_files[src_ap] = (f_mt, f_sz)
                     copystat(src_ap, dst_ap)
                     if not self.keep:
                         os.unlink(src_ap)
@@ -437,7 +437,7 @@ class Dirmon(object):
                     if os.path.exists(dst_ap):
                         warn("target file exists; deleting %s", dst_ap)
                         os.unlink(dst_ap)
-                    self.kept_files[src_ap] = mt_and_sz
+                    self.kept_files[src_ap] = (f_mt, f_sz)
                     dgst, dur = copyfile(src_ap, dst_ap)
                     shutil.copy2(src_ap, dst_ap)
                 else:
@@ -463,7 +463,7 @@ class Dirmon(object):
                             pass
                 if dur:
                     t = "%s  %s  # %s OK in %.1fs, %dM/s"
-                    spd = st.st_size / 1024 / 1024 / dur
+                    spd = f_sz / 1024 / 1024 / dur
                     info(t, dgst[:32], dst_ap, action_text, dur, spd)
                 else:
                     t = "%s  %s  # %s OK in %.1fs"
@@ -471,9 +471,9 @@ class Dirmon(object):
 
                 if do_log:
                     dt_now = unix2iso(0)
-                    dt_file = unix2iso(st.st_mtime)
+                    dt_file = unix2iso(f_mt)
                     t = "%s | %s | %12s | %s | %s"
-                    log.append(t % (dt_now, dt_file, st.st_size, dgst, relpath))
+                    log.append(t % (dt_now, dt_file, f_sz, dgst, relpath))
 
                 self.msg_scanning = 0
 
@@ -489,10 +489,10 @@ class Dirmon(object):
             ]
             expired.sort(reverse=True)
             for ap in expired:
+                self.empty_dirs.pop(ap, None)
                 try:
                     os.rmdir(ap)
                     num_dropped += 1
-                    del self.empty_dirs[ap]
                     debug("deleted directory %s", ap)
                 except Exception as ex:
                     debug("failed to delete directory %s: %r", ap, ex)
